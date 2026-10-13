@@ -84,15 +84,24 @@ export async function fetchSurfaceMountLookup(
     }
   }
   const tick = (): Promise<void> => {
-    inflight = refresh().catch((error: unknown) => {
-      console.error(
-        mounts === undefined
-          ? 'agh serve: could not read the Surface mount table; Surfaces will not be reachable'
-          : 'agh serve: Surface mount table refresh failed; serving the last known table',
-        error,
-      )
-    })
-    return inflight
+    if (stopped) return Promise.resolve()
+    // A handshake can outlast the poll interval. Reuse it until the private client has closed,
+    // rather than opening overlapping daemon connections during a slow or unavailable period.
+    if (inflight) return inflight
+    const pending: Promise<void> = refresh()
+      .catch((error: unknown) => {
+        console.error(
+          mounts === undefined
+            ? 'agh serve: could not read the Surface mount table; Surfaces will not be reachable'
+            : 'agh serve: Surface mount table refresh failed; serving the last known table',
+          error,
+        )
+      })
+      .finally(() => {
+        if (inflight === pending) inflight = undefined
+      })
+    inflight = pending
+    return pending
   }
 
   await tick()
@@ -103,9 +112,10 @@ export async function fetchSurfaceMountLookup(
     // instead of being re-derived here.
     lookup: (pathname: string) => (mounts === undefined ? undefined : matchMount(mounts, pathname)),
     async close() {
-      if (stopped) return
-      stopped = true
-      clearInterval(timer)
+      if (!stopped) {
+        stopped = true
+        clearInterval(timer)
+      }
       await inflight?.catch(() => undefined)
     },
   })

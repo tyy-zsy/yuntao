@@ -1,38 +1,57 @@
 // cloudforge-tools — 把点云几何核心接入 Agnes Harness 的后端插件
 //
-// 五个工具全部经 cloudforge-cli.exe 子进程调用（C++ RANSAC 核心，静态链接）：
+// 几何工具经 AGH ToolContext.exec 调用 cloudforge-cli（C++ RANSAC 核心）：
 //   cloudforge_cloud_info  点云元信息（点数/包围盒/格式诊断）
 //   cloudforge_detect      RANSAC 基元检测（含精拟合指标 RMSE/噪声σ/软评分）
 //   cloudforge_refine      对点子集精拟合（<50 点会被核心拒绝）
 //   cloudforge_synth       生成已知真值的合成点云（验证基准）
 //   cloudforge_verify      检测结果 vs 真值的误差判定（支持圆柱↔圆锥泛化匹配）
+//   cloudforge_verify_current  当前工作台请求的点云/检测/CAD/真值验证，记录 AGH 执行回执
 //
 // 零依赖插件：参数 Schema 手写 TypeBox kind 标记，CLI 位置可用环境变量 CLOUDFORGE_CLI 覆盖。
 // CLI 输出为 JSON（前缀可能含 Schnabel 诊断行），解析时取第一个 '{' 起始的子串。
 
-import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { promisify } from 'node:util'
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { randomUUID } from 'node:crypto'
 
-const run = promisify(execFile)
 const Kind = Symbol.for('TypeBox.Kind')
 
-const DEFAULT_CLI = 'E:/C++/Point/CloudForge/hackathon/cli/build/Release/cloudforge-cli.exe'
+const DEFAULT_CLI = 'hackathon/cli/build/Release/cloudforge-cli.exe'
 
-function cliPath() {
-  return process.env.CLOUDFORGE_CLI || DEFAULT_CLI
+function projectRoot(context) {
+  for (const initial of [context?.cwd, process.env.CLOUDFORGE_WORKSPACE, process.cwd(), dirname(fileURLToPath(import.meta.url))].filter(Boolean)) {
+    let dir = resolve(initial)
+    for (;;) {
+      if (existsSync(join(dir, 'hackathon', 'cli', 'CMakeLists.txt')) && existsSync(join(dir, 'src-tauri', 'Cargo.toml'))) return realpathSync(dir)
+      if (existsSync(join(dir, 'CloudForge', 'hackathon', 'cli', 'CMakeLists.txt')) && existsSync(join(dir, 'CloudForge', 'src-tauri', 'Cargo.toml'))) return realpathSync(join(dir, 'CloudForge'))
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  throw new Error('CloudForge workspace unavailable; open the project or configure CLOUDFORGE_WORKSPACE')
 }
 
-async function runCli(args, { timeoutMs = 300000 } = {}) {
-  const exe = cliPath()
+function filePath(context, value) { return resolve(projectRoot(context), value) }
+
+async function runCli(args, { timeoutMs = 300000, context } = {}) {
+  let base
+  try { base = projectRoot(context) } catch (error) { return { ok: false, error: error.message } }
+  const exe = resolve(base, process.env.CLOUDFORGE_CLI || DEFAULT_CLI)
   if (!existsSync(exe)) {
     return { ok: false, error: `cloudforge-cli not found: ${exe} (build hackathon/cli first, or set CLOUDFORGE_CLI)` }
   }
   try {
-    const { stdout } = await run(exe, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true })
+    if (typeof context?.exec !== 'function') return { ok: false, error: 'AGH tool execution context unavailable' }
+    const { code, stdout, timedOut, truncated } = await context.exec([exe, ...args], { cwd: base, timeoutMs: Math.min(timeoutMs, context.timeoutMs || timeoutMs) })
+    if (timedOut || truncated) return { ok: false, error: timedOut ? 'cloudforge-cli timed out' : 'cloudforge-cli output truncated' }
     const start = stdout.indexOf('{')
     if (start < 0) return { ok: false, error: 'no JSON in cloudforge-cli output', raw: stdout.slice(0, 2000) }
-    return JSON.parse(stdout.slice(start))
+    const parsed = JSON.parse(stdout.slice(start))
+    if (code !== 0 && parsed.ok !== false && typeof parsed.pass !== 'boolean') return { ok: false, error: `cloudforge-cli exited with code ${code}`, output: parsed }
+    return parsed
   } catch (err) {
     // 非零退出码：CLI 仍输出 JSON（ok:false 的业务失败，交回模型处理——这是闭环的一部分）
     const stdout = err && err.stdout ? err.stdout : ''
@@ -88,10 +107,10 @@ export const cloudforgeTools = {
       name: 'cloudforge_cloud_info',
       description:
         'Inspect a point cloud file (PLY/PCD/TXT/STL/OBJ/NuScenes BIN): returns point count, bounding box, span and format diagnostics. Read-only. Call this FIRST to understand the cloud before detection.',
-      parameters: objSchema({ cloud: strParam('Absolute path of the point cloud file') }, ['cloud']),
+      parameters: objSchema({ cloud: strParam('Project-relative or absolute path of the point cloud file') }, ['cloud']),
       meta: readOnlyMeta,
-      async execute({ cloud }) {
-        const structured = await runCli(['info', cloud])
+      async execute({ cloud }, context) {
+        const structured = await runCli(['info', filePath(context, cloud)], { context })
         return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured }
       },
     })
@@ -110,10 +129,10 @@ export const cloudforgeTools = {
         ['cloud', 'output_dir'],
       ),
       meta: writeMeta(60000),
-      async execute({ cloud, preset = 'mechanical', min_inlier = 0, output_dir }) {
-        const args = ['detect', cloud, '--preset', preset === 'outdoor' ? 'outdoor' : 'mechanical', '--output', output_dir]
+      async execute({ cloud, preset = 'mechanical', min_inlier = 0, output_dir }, context) {
+        const args = ['detect', filePath(context, cloud), '--preset', preset === 'outdoor' ? 'outdoor' : 'mechanical', '--output', filePath(context, output_dir)]
         if (min_inlier > 0) args.push('--min-inlier', String(Math.round(min_inlier)))
-        const structured = await runCli(args)
+        const structured = await runCli(args, { context })
         return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured }
       },
     })
@@ -132,10 +151,10 @@ export const cloudforgeTools = {
         ['cloud', 'indices_file'],
       ),
       meta: writeMeta(60000),
-      async execute({ cloud, indices_file, hint = 'unknown', output_dir }) {
-        const args = ['refine', cloud, '--indices', indices_file, '--hint', hint]
-        if (output_dir) args.push('--output', output_dir)
-        const structured = await runCli(args)
+      async execute({ cloud, indices_file, hint = 'unknown', output_dir }, context) {
+        const args = ['refine', filePath(context, cloud), '--indices', filePath(context, indices_file), '--hint', hint]
+        if (output_dir) args.push('--output', filePath(context, output_dir))
+        const structured = await runCli(args, { context })
         return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured }
       },
     })
@@ -152,8 +171,8 @@ export const cloudforgeTools = {
         ['output_pcd'],
       ),
       meta: writeMeta(15000),
-      async execute({ output_pcd, scene = 'plane-cylinder' }) {
-        const structured = await runCli(['synth', output_pcd, '--scene', scene], { timeoutMs: 60000 })
+      async execute({ output_pcd, scene = 'plane-cylinder' }, context) {
+        const structured = await runCli(['synth', filePath(context, output_pcd), '--scene', scene], { timeoutMs: 60000, context })
         return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured }
       },
     })
@@ -172,11 +191,11 @@ export const cloudforgeTools = {
         ['truth', 'result'],
       ),
       meta: readOnlyMeta,
-      async execute({ truth, result, tolerance, angle_tolerance_deg }) {
-        const args = ['verify', '--truth', truth, '--result', result]
+      async execute({ truth, result, tolerance, angle_tolerance_deg }, context) {
+        const args = ['verify', '--truth', filePath(context, truth), '--result', filePath(context, result)]
         if (tolerance !== undefined) args.push('--tol', String(tolerance))
         if (angle_tolerance_deg !== undefined) args.push('--angle-deg', String(angle_tolerance_deg))
-        const structured = await runCli(args, { timeoutMs: 60000 })
+        const structured = await runCli(args, { timeoutMs: 60000, context })
         return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured }
       },
     })
@@ -198,19 +217,63 @@ export const cloudforgeTools = {
         ['cloud', 'result_dir', 'output_py'],
       ),
       meta: writeMeta(30000),
-      async execute({ cloud, result_dir, output_py, ids, hull = true, union = false, min_inlier }) {
-        const args = ['cad', cloud, '--result', `${result_dir.replace(/[\\/]+$/, '')}/result.json`, '--out', output_py]
+      async execute({ cloud, result_dir, output_py, ids, hull = true, union = false, min_inlier }, context) {
+        const args = ['cad', filePath(context, cloud), '--result', filePath(context, `${result_dir.replace(/[\\/]+$/, '')}/result.json`), '--out', filePath(context, output_py)]
         if (ids) args.push('--ids', String(ids))
         if (hull) args.push('--hull')
         if (union) args.push('--union')
         if (min_inlier !== undefined) args.push('--min-inlier', String(Math.round(min_inlier)))
-        const structured = await runCli(args, { timeoutMs: 120000 })
+        const structured = await runCli(args, { timeoutMs: 120000, context })
         return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured }
       },
     })
 
+    agnes.registerTool({
+      name: 'cloudforge_verify_current',
+      description: 'Execute the current CloudForge workbench verification request through AGH. Input must be outputs/verify-*/request.json prepared for THIS conversation. Inspect the request first; never replace the selected cloud/result/CAD/truth with a demo or synthesized reference. Runs source metadata, original-order geometry/index and fit checks, linked CAD validity/unit/bounds, and CLI truth verify only when a matching reference is available. Writes verify.json and verify-report.md beside the request, with real AGH session/tool execution receipt. No truth means precisionVerified=false, never an overall precision PASS. Read the saved report, explain failures/missing dependencies, and continue the conversation. This write/compute tool requires the normal AGH approval policy.',
+      parameters: objSchema({ request: strParam('Project-relative outputs/verify-*/request.json prepared by the CloudForge panel') }, ['request']),
+      meta: { ...writeMeta(240000), replay: 'idempotent' },
+      async execute({ request }, context) {
+        let workspace
+        try {
+          workspace = projectRoot(context)
+          if (!context?.session?.key || typeof context.exec !== 'function') throw new Error('Live AGH session/tool context required')
+          const engine = await import(pathToFileURL(join(workspace, 'hackathon', 'tools', 'verification-current.mjs')).href)
+          const result = await engine.executeCurrentVerification({ workspace, request, context })
+          const dir = dirname(resolve(workspace, request))
+          const portable = (file) => relative(workspace, file).replaceAll('\\', '/')
+          const structured = { ok: !['error', 'stale'].includes(result.status), id: result.id, status: result.status, summary: result.summary, precisionVerified: result.precisionVerified,
+            checks: result.checks.map(({ metrics, ...check }) => ({ ...check, ...(check.shapeIds?.length > 100 ? { shapeIds: check.shapeIds.slice(0, 100), additionalShapeIds: check.shapeIds.length - 100 } : {}) })), executor: result.executor,
+            verificationResultPath: portable(join(dir, 'verify.json')), reportPath: portable(join(dir, 'verify-report.md')) }
+          return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured, isError: !structured.ok }
+        } catch (error) {
+          const message = String(error?.message || error).slice(0, 700)
+          // A preflight stale/cancel error also needs a terminal panel status.
+          // Publish only to an existing same-session request inside outputs.
+          try {
+            const normalized = String(request).replaceAll('\\', '/')
+            if (!workspace || !/^outputs\/verify-[A-Za-z0-9_.-]+\/request\.json$/.test(normalized) || isAbsolute(normalized)) throw new Error('Invalid request')
+            const file = resolve(workspace, normalized), dir = dirname(file)
+            for (const path of [join(workspace, 'outputs'), dir, file]) if (lstatSync(path).isSymbolicLink()) throw new Error('Linked request')
+            if (realpathSync(dir) !== dir || realpathSync(file) !== file) throw new Error('Linked directory')
+            const prepared = JSON.parse(readFileSync(file, 'utf8'))
+            if (prepared.sessionId !== context?.session?.key || !prepared.id) throw new Error('Wrong session')
+            const statusFile = join(dir, 'status.json')
+            const previous = existsSync(statusFile) ? JSON.parse(readFileSync(statusFile, 'utf8')) : null
+            // Another tool call may be active; do not overwrite its progress.
+            if (previous?.status === 'running' && existsSync(join(dir, 'execution.lock.json'))) throw new Error('Already running')
+            const temporary = `${statusFile}.${randomUUID()}.tmp`, now = new Date().toISOString()
+            writeFileSync(temporary, JSON.stringify({ id: prepared.id, jobId: prepared.id, status: error?.stale ? 'stale' : 'error', stage: message, done: true, error: message, precisionVerified: false, updatedAt: now, finishedAt: now }), { flag: 'wx' })
+            renameSync(temporary, statusFile)
+          } catch { /* original error remains authoritative */ }
+          const structured = { ok: false, status: error?.stale ? 'stale' : 'error', error: message }
+          return { content: [{ type: 'text', text: JSON.stringify(structured) }], structured, isError: true }
+        }
+      },
+    })
+
     agnes.on('session_start', () => {
-      agnes.ctx.log.info('cloudforge-tools ready: cloud_info/detect/refine/synth/verify/cad_export')
+      agnes.ctx.log.info('cloudforge-tools ready: cloud_info/detect/refine/synth/verify/cad_export/verify_current')
     })
   },
 }

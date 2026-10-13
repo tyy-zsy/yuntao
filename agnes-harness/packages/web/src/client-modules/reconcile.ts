@@ -260,6 +260,45 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
   const timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts }
   const packages = new Map<string, PackageState>()
   const statuses = new RuntimeStatusStore()
+  const rosterRetryDelays = [500, 1_500, 3_000, 6_000, 10_000]
+  let rosterRetryTimer: ReturnType<typeof setTimeout> | undefined
+  let rosterRetryAttempt = 0
+  let stopped = false
+  ctx.effect(() => () => {
+    stopped = true
+    clearTimeout(rosterRetryTimer)
+    rosterRetryTimer = undefined
+    for (const state of packages.values()) state.epoch++
+  })
+
+  function resetRosterRetry(): void {
+    clearTimeout(rosterRetryTimer)
+    rosterRetryTimer = undefined
+    rosterRetryAttempt = 0
+  }
+
+  function scheduleRosterRetry(): void {
+    if (stopped || rosterRetryTimer !== undefined) return
+    const delay = rosterRetryDelays[rosterRetryAttempt]
+    if (delay === undefined) return
+    rosterRetryAttempt++
+    rosterRetryTimer = setTimeout(() => {
+      rosterRetryTimer = undefined
+      if (!stopped)
+        void runDiff(true).catch(() => console.warn('[client-modules] 自动名册对账失败'))
+    }, delay)
+  }
+
+  async function readRoster(): Promise<ClientRoster> {
+    try {
+      const roster = await source.list()
+      resetRosterRetry()
+      return roster
+    } catch (error) {
+      scheduleRosterRetry()
+      throw error
+    }
+  }
 
   async function lifecycle(step: ClientModuleLifecycleStep, packageId: string): Promise<void> {
     await options.onLifecycleStep?.(step, packageId)
@@ -432,6 +471,7 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
       let mod: unknown
       let stagedStyles: PreparedClientStyles | undefined
       try {
+        if (stopped || epoch !== state.epoch) return
         if (state.cleanupPending && !(await disposeCleanup(rowId, state))) {
           if (epoch === state.epoch) fail(rowId, state, 'dispose')
           return
@@ -440,6 +480,7 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
         // fiber until that old fiber has actually settled; removing its registrations is not a
         // substitute for draining its asynchronous work.
         await state.draining?.catch(() => undefined)
+        if (stopped || epoch !== state.epoch) return
         const catalogError = validateCatalogContract(target)
         const unsupportedSlot = target.slots.find((slot) => registry?.spec && !registry.spec(slot))
         if (catalogError !== undefined || unsupportedSlot !== undefined) {
@@ -458,6 +499,7 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
           )
         return
       }
+      if (stopped || epoch !== state.epoch) return
       try {
         stagedStyles = await prepareStyles(target, timeouts.styles)
       } catch (error) {
@@ -677,7 +719,7 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
    * returns as soon as the work is enqueued: planning never awaits an import, a stylesheet fetch,
    * an apply or a teardown, so one slow module cannot delay another module's change.
    */
-  function plan(roster: ClientRoster): Promise<void>[] {
+  function plan(roster: ClientRoster, automaticReadRetry = false): Promise<void>[] {
     const wanted = new Map(roster.modules.map((mod) => [rowKey(mod), mod]))
     const blockedRows = migrateRosterAliases(roster.rowAliases, wanted)
     const waits: Promise<void>[] = []
@@ -734,6 +776,10 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
       if (blockedRows.has(rowId)) continue
       const state = stateOf(rowId)
       state.rosterPresent = true
+      // Read recovery must not repeat a failed plugin's initialization/effects. Explicit
+      // invalidation or a new authoritative revision retains the existing retry behavior.
+      if (automaticReadRetry && state.phase === 'failed' && state.target?.revision === mod.revision)
+        continue
       const unchanged = state.active?.revision === mod.revision && state.phase === 'active'
       const pending =
         state.target?.revision === mod.revision && (state.phase === 'loading' || state.phase === 'active')
@@ -746,14 +792,17 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
   // Roster reads are serialized so two notifications cannot plan against each other's half-applied
   // state; the work they enqueue stays outside that critical section.
   let planning: Promise<void> = Promise.resolve()
-  function runDiff(): Promise<void> {
+  function runDiff(automaticReadRetry = false): Promise<void> {
     const planned = planning.then(async (): Promise<Promise<void>[]> => {
+      if (stopped) return []
+      let roster: ClientRoster
       try {
-        return plan(await source.list())
+        roster = await readRoster()
       } catch {
-        // 名册读取失败保持现状：失败不能伪造 ready（WC10），下次触发再对账。
+        // 保持现状且有界重读正式名册；失败不能伪造 ready（WC10）。
         return []
       }
+      return stopped ? [] : plan(roster, automaticReadRetry)
     })
     planning = planned.then(
       () => undefined,
@@ -768,7 +817,9 @@ export function createReconciler(options: ReconcilerOptions): ClientReconciler {
     reconcileNow: () => runDiff(),
     invalidate: () => runDiff(),
     async reload(packageId, revision) {
-      const roster = await source.list()
+      if (stopped) return
+      const roster = await readRoster()
+      if (stopped) return
       const targets = roster.modules.filter(
         (module) => module.packageId === packageId && module.revision === revision,
       )

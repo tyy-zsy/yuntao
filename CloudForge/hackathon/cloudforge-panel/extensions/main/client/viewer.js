@@ -150,8 +150,9 @@ function createStage(container, { onPick } = {}) {
       // 几轮放大后相机退到极远，画面上就是「视口全白」。
       // （原先的启发式版本没这个问题，是因为紧接着的 controls.update() 会顺带 lookAt。）
       camera.lookAt(center)
-      camera.near = Math.max(span * 0.005, dist - span * 1.5)
-      camera.far = dist + span * 3
+      // 近裁剪面保持足够近，滚轮放大后仍能看到点云；远端覆盖允许的缩放范围。
+      camera.near = span * 0.001
+      camera.far = Math.max(span * 40, dist + span * 3)
       camera.updateMatrixWorld(true)
       camera.updateProjectionMatrix()
       // 角点轮廓：包围盒在斜视下的投影，作为无点云时的兜底（mesh 视口走这条）
@@ -196,7 +197,7 @@ function createStage(container, { onPick } = {}) {
     controls.update()
   }
 
-  /** 相机对准某个包围盒（点击形状后飞行过去） */
+  /** 相机对准某个包围盒（明确要求聚焦形状时调用） */
   const focus = (box) => {
     if (!box) return
     const size = new THREE.Vector3(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2])
@@ -229,8 +230,30 @@ function createStage(container, { onPick } = {}) {
   if (onPick) {
     const ray = new THREE.Raycaster()
     const ndc = new THREE.Vector2()
+    const canvas = renderer.domElement
+    let pickGesture = null
+    const moved = (ev, gesture) => (ev.clientX - gesture.x) ** 2 + (ev.clientY - gesture.y) ** 2 > 25
+    canvas.addEventListener('pointerdown', (ev) => {
+      // OrbitControls 的拖拽结束也可能产生 click，只允许单指/左键的短点击拾取。
+      pickGesture = ev.isPrimary && ev.button === 0 && ev.buttons === 1
+        ? { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, dragged: false, ended: false }
+        : null
+    })
+    canvas.addEventListener('pointermove', (ev) => {
+      if (pickGesture?.pointerId !== ev.pointerId || pickGesture.ended) return
+      if (moved(ev, pickGesture) || ev.buttons !== 1) pickGesture.dragged = true
+    })
+    canvas.addEventListener('pointerup', (ev) => {
+      if (pickGesture?.pointerId !== ev.pointerId) return
+      pickGesture.dragged ||= moved(ev, pickGesture) || ev.button !== 0
+      pickGesture.ended = true
+    })
+    canvas.addEventListener('pointercancel', () => { pickGesture = null })
+    canvas.addEventListener('wheel', () => { pickGesture = null }, { passive: true })
     renderer.domElement.addEventListener('click', (ev) => {
-      if (!state.visible || !state.width) return
+      const gesture = pickGesture
+      pickGesture = null
+      if (!gesture?.ended || gesture.dragged || ev.button !== 0 || !state.visible || !state.width) return
       const r = renderer.domElement.getBoundingClientRect()
       ndc.x = ((ev.clientX - r.left) / r.width) * 2 - 1
       ndc.y = -((ev.clientY - r.top) / r.height) * 2 + 1
@@ -486,15 +509,14 @@ export function createCloudViewer(container, { onPickShape } = {}) {
     },
     pickShapeId(ray) {
       // 叠加网格优先（更贴近用户"点形状"的直觉）
-      const hits = ray.intersectObjects(overlayGroup.children, false)
+      const hits = ray.intersectObjects(overlayGroup.visible ? overlayGroup.children.filter((m) => m.visible) : [], false)
       if (hits.length) return hits[0].object.userData.shapeId ?? null
-      const ids = shapes.map((s) => s.id)
-      if (!ids.length) return null
-      const hit = ray.intersectObjects(shapes.map((s) => s.points), false)
+      const visibleShapes = shapes.filter((s) => s.points.visible)
+      if (!visibleShapes.length) return null
+      const hit = ray.intersectObjects(visibleShapes.map((s) => s.points), false)
       if (hit.length) {
         const found = hit[0].object
-        const idx = shapes.findIndex((s) => s.points === found)
-        return idx >= 0 ? ids[idx] : null
+        return visibleShapes.find((s) => s.points === found)?.id ?? null
       }
       return null
     },
@@ -528,6 +550,8 @@ export function createMeshViewer(container) {
 
   return {
     stage,
+    set visible(v) { stage.visible = v },
+    get visible() { return stage.visible },
     setMesh(positions, triCount, bbox) {
       clear(mesh)
       clear(wire)

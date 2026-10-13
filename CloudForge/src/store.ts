@@ -8,7 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { CloudViewer } from "./viewer";
 import type { AiResult, DetectData } from "./types";
-import { AI_PROFILES, SHAPE_NAMES_EN } from "./types";
+import { AI_PROFILES, OPEN_FILTERS, SHAPE_NAMES_EN } from "./types";
 
 /* ---------------- localStorage 持久化（对齐 QSettings 键） ---------------- */
 
@@ -57,6 +57,9 @@ export const store = reactive({
   // 点云
   hasCloud: false,
   pointCount: 0,
+  hasCad: false,
+  cadTriangleCount: 0,
+  cadWireframe: false,
   sourceName: "",
   sourcePath: "",
   streamDownsampled: false,
@@ -98,6 +101,7 @@ export const store = reactive({
 
 let viewer: CloudViewer | null = null;
 let cloudCache: Float32Array | null = null; // 当前主云（最新 cloudVersion）
+let cadCache: Float32Array | null = null; // STL 全部三角面，独立于点云与 AI 数据
 let logs: { time: string; level: "info" | "ok" | "warn" | "error"; text: string }[] = [];
 let logVersion = 0;
 const logListeners = new Set<() => void>();
@@ -105,10 +109,14 @@ const logListeners = new Set<() => void>();
 export function initViewer(el: HTMLElement) {
   viewer?.dispose();
   viewer = new CloudViewer(el);
+  if (store.hasCad && cadCache) {
+    viewer.setCadMesh(cadCache, store.cloudVersion);
+    viewer.setCadWireframe(store.cadWireframe);
+  }
   if (import.meta.env.TAURI_ENV_PLATFORM === undefined && !("__TAURI_INTERNALS__" in window)) {
     return; // 纯浏览器预览：无 Tauri IPC，仅渲染外壳
   }
-  void refreshCloud().catch(() => {});
+  if (!store.hasCad) void refreshCloud().catch(() => {});
   wireEvents();
 }
 
@@ -153,7 +161,9 @@ function setBusy(busy: boolean, message = "") {
 /* ---------------- 点云数据搬运 ---------------- */
 
 async function refreshCloud(): Promise<Float32Array | null> {
+  const version = store.cloudVersion;
   const buf = (await invoke("take_cloud")) as ArrayBuffer;
+  if (version !== store.cloudVersion) return null; // 旧读请求不能覆盖后来打开的 CAD/点云缓存
   if (!buf || buf.byteLength === 0) {
     cloudCache = null;
     return null;
@@ -183,6 +193,12 @@ export function fitToCloud() {
   viewer?.fitToCloud();
 }
 
+export function setCadWireframe(enabled: boolean) {
+  if (store.busy || !store.hasCad) return;
+  store.cadWireframe = enabled;
+  viewer?.setCadWireframe(enabled);
+}
+
 /* ---------------- AI 实例显示形状 ---------------- */
 
 function aiDisplayClouds(): Float32Array[] {
@@ -193,14 +209,21 @@ function aiDisplayClouds(): Float32Array[] {
 /* ---------------- 工作流 ---------------- */
 
 let dialogOpen = false; // 原生对话框挂起期间屏蔽其它动作（模拟 Qt 模态）
+let pendingCloudSource: { path: string; name: string } | null = null;
 
 /// 命令行/自动化入口：按路径直接加载（不开文件对话框）
 export async function loadPointCloudFromPath(file: string): Promise<void> {
   if (store.busy) return;
   store.settings.lastLoadDir = file.replace(/[\\/][^\\/]+$/, "");
   persistSettings();
-  store.sourcePath = file;
-  store.sourceName = file.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
+  if (/\.stl$/i.test(file)) {
+    await loadCadMesh(file);
+    return;
+  }
+  pendingCloudSource = {
+    path: file,
+    name: file.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "",
+  };
   log("info", `正在加载: ${file.split(/[\\/]/).pop()}`);
   setBusy(true, "读取点云…");
   store.loadProgress = { active: true, phase: "", percent: 0, doneMb: 0, totalMb: 0 };
@@ -208,10 +231,65 @@ export async function loadPointCloudFromPath(file: string): Promise<void> {
     await invoke("start_load", { path: file });
   } catch (e) {
     // start_load 返回 Err 时不会有 load://done 事件，必须自行复位
+    pendingCloudSource = null;
+    if (!store.hasCad) store.sourcePath = "";
     store.loadProgress.active = false;
     setBusy(false);
     log("error", String(e));
   }
+}
+
+async function loadCadMesh(file: string): Promise<void> {
+  log("info", `正在加载 CAD 网格: ${file.split(/[\\/]/).pop()}`);
+  setBusy(true, "读取 CAD 网格…");
+  store.loadProgress = { active: true, phase: "STL", percent: 0, doneMb: 0, totalMb: 0 };
+  let triangles: Float32Array;
+  try {
+    const buffer = await invoke<ArrayBuffer>("load_cad_mesh", { path: file });
+    if (!(buffer instanceof ArrayBuffer) || !buffer.byteLength || buffer.byteLength % 36 !== 0) {
+      throw new Error("STL 未返回完整的三角形网格");
+    }
+    triangles = new Float32Array(buffer);
+    // Viewer 先构建新几何，再替换场景；读取/构建失败时保留原有模型与元数据。
+    viewer?.setCadMesh(triangles, store.cloudVersion + 1);
+  } catch (error) {
+    store.loadProgress.active = false;
+    setBusy(false);
+    log("error", `CAD 加载失败: ${String(error)}`);
+    return;
+  }
+
+  resetAnalysisState();
+  store.hasCad = true;
+  store.cadTriangleCount = triangles.length / 9;
+  store.cadWireframe = false;
+  viewer?.setCadWireframe(false);
+  cadCache = triangles;
+  cloudCache = null;
+  store.hasCloud = false;
+  store.pointCount = 0;
+  store.streamDownsampled = false;
+  store.sourcePath = file;
+  store.sourceName = file.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
+  store.wasCleared = false;
+  store.cloudVersion++;
+  store.aiHasRun = false;
+  store.aiProgress = { phase: "", progress: 0 };
+  store.aiDiagnostics = [];
+  store.lastAiOutputDir = "";
+  store.viewMode = 0;
+  store.pointCountLabel = `${store.cadTriangleCount.toLocaleString()} 个三角面`;
+  store.sceneLabel = "CAD 实体预览 · 滚轮缩放 · 左键旋转 · 右键平移";
+  store.loadProgress.active = false;
+  // 旧点云不能留给 AI/精拟合入口；CAD 缓存只用于预览，不作为识别输入。
+  try {
+    await invoke("clear_cloud");
+  } catch (error) {
+    log("warn", `CAD 已载入，旧点云后台清理失败: ${String(error)}`);
+  }
+  setBusy(false);
+  updateStatus(`CAD 加载完成 · ${store.cadTriangleCount.toLocaleString()} 个三角面 · 保持文件单位与坐标`);
+  log("ok", `CAD 网格加载完成: ${store.cadTriangleCount.toLocaleString()} 个三角面`);
 }
 
 export async function loadPointCloud() {
@@ -220,15 +298,15 @@ export async function loadPointCloud() {
   let file: string | null = null;
   try {
     file = await open({
-      title: "加载点云",
+      title: "加载点云或 CAD 网格",
       defaultPath: store.settings.lastLoadDir || undefined,
       filters: [
-        { name: "点云文件", extensions: ["pcd", "ply", "txt", "stl", "obj", "bin"] },
+        OPEN_FILTERS,
         { name: "PCD", extensions: ["pcd"] },
         { name: "PLY", extensions: ["ply"] },
         { name: "NuScenes BIN", extensions: ["bin"] },
         { name: "TXT", extensions: ["txt"] },
-        { name: "STL", extensions: ["stl"] },
+        { name: "CAD STL 网格", extensions: ["stl"] },
         { name: "OBJ", extensions: ["obj"] },
         { name: "所有文件", extensions: ["*"] },
       ],
@@ -237,36 +315,29 @@ export async function loadPointCloud() {
     dialogOpen = false;
   }
   if (!file || typeof file !== "string") return;
-  store.settings.lastLoadDir = file.replace(/[\\/][^\\/]+$/, "");
-  persistSettings();
-  store.sourcePath = file;
-  store.sourceName = file.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
-  log("info", `正在加载: ${file.split(/[\\/]/).pop()}`);
-  setBusy(true, "读取点云…");
-  store.loadProgress = { active: true, phase: "", percent: 0, doneMb: 0, totalMb: 0 };
-  try {
-    await invoke("start_load", { path: file });
-  } catch (e) {
-    // start_load 返回 Err 时不会有 load://done 事件，必须自行复位
-    store.loadProgress.active = false;
-    setBusy(false);
-    log("error", String(e));
-  }
+  await loadPointCloudFromPath(file);
 }
 
 async function onLoadDone(p: { ok: boolean; count: number; streamDownsampled: boolean; sourceBytes: number; error?: string }) {
   store.loadProgress.active = false;
   if (!p.ok) {
-    // 对齐原版失败分支：只清 sourcePath，不动已有点云与 AI 状态
-    store.sourcePath = "";
+    // 保留已有画面；点云后端已清空来源时禁用 AI，当前 CAD 的来源仍保留。
+    pendingCloudSource = null;
+    if (!store.hasCad) store.sourcePath = "";
     setBusy(false);
     updateStatus("加载失败");
     log("error", p.error ?? "加载失败");
     return;
   }
-  resetAnalysisState();
   await refreshCloud();
+  resetAnalysisState();
+  if (pendingCloudSource) {
+    store.sourcePath = pendingCloudSource.path;
+    store.sourceName = pendingCloudSource.name;
+    pendingCloudSource = null;
+  }
   store.hasCloud = true;
+  clearCadState();
   store.pointCount = p.count;
   store.streamDownsampled = p.streamDownsampled;
   store.wasCleared = false;
@@ -292,6 +363,7 @@ export async function generateDemo() {
     resetAnalysisState();
     await refreshCloud();
     store.hasCloud = true;
+    clearCadState();
     store.pointCount = info.count;
     store.sourceName = info.sourceName;
     store.sourcePath = "";
@@ -340,6 +412,13 @@ function resetAnalysisState() {
   store.refinements = {};
   store.selectedAiIndex = -1;
   store.searchQuery = "";
+}
+
+function clearCadState() {
+  store.hasCad = false;
+  store.cadTriangleCount = 0;
+  store.cadWireframe = false;
+  cadCache = null;
 }
 
 export async function startAi() {
@@ -415,7 +494,10 @@ function onAiDone(p: { ok: boolean; outputDir?: string; error?: string; result?:
   store.aiResult = result;
   store.aiProfileName = p.profileName ?? "";
   // 主云切换为标注云
+  const version = store.cloudVersion;
+  const displayedResult = store.aiResult;
   refreshCloud().then(() => {
+    if (store.hasCad || store.aiResult !== displayedResult || version !== store.cloudVersion) return;
     store.cloudVersion++;
     viewer?.setZUpView();
     showAiResults();
@@ -444,7 +526,7 @@ function showAiResults() {
 }
 
 export function setViewMode(mode: number) {
-  if (store.busy) return;
+  if (store.busy || store.hasCad) return;
   const result = store.aiResult;
   if (mode === 0) {
     store.viewMode = 0;
@@ -493,7 +575,7 @@ export function selectInstance(i: number) {
 }
 
 export async function measure() {
-  if (store.busy) return;
+  if (store.busy || store.hasCad) return;
   const result = store.aiResult;
   const i = store.selectedAiIndex;
   if (!result || result.task !== "instance_segmentation" || i < 0 || i >= result.instances.length) {
@@ -535,6 +617,8 @@ export function clearAll() {
   store.aiHasRun = false;
   store.fitPreset = 0;
   store.hasCloud = false;
+  clearCadState();
+  pendingCloudSource = null;
   store.pointCount = 0;
   store.sourceName = "";
   store.sourcePath = "";
@@ -551,7 +635,7 @@ export function clearAll() {
 }
 
 export async function exportResults() {
-  if (store.busy || dialogOpen) return;
+  if (store.busy || dialogOpen || store.hasCad) return;
   if (Object.keys(store.refinements).length === 0) {
     log("warn", "请先选择一个 CloudForge 实例并完成精拟合");
     return;
@@ -638,15 +722,16 @@ export const ui = computed(() => {
   return {
     idle,
     hasCloud: s.hasCloud,
+    hasCad: s.hasCad,
     canSave: idle && s.hasCloud,
-    canMeasure: idle && hasAiSelection && !s.measuring,
-    canClear: idle && s.hasCloud,
-    canExport: idle && hasRefinements,
+    canMeasure: idle && !s.hasCad && hasAiSelection && !s.measuring,
+    canClear: idle && (s.hasCloud || s.hasCad),
+    canExport: idle && !s.hasCad && hasRefinements,
     canGenerate: idle,
     canLoad: idle,
     canSearch: idle,
-    aiProfileEnabled: idle,
-    aiParamsEnabled: idle && !profile.nuscenes,
+    aiProfileEnabled: idle && !s.hasCad,
+    aiParamsEnabled: idle && !s.hasCad && !profile.nuscenes,
     aiButtonEnabled: s.aiRunning || (idle && hasAiInput),
     aiButtonLabel: s.aiRunning ? "取消 AI" : s.aiHasRun ? "重新运行" : "运行识别",
     seg: {

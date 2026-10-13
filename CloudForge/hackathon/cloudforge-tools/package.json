@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "云铸（CloudForge）点云几何检测工具集：info/detect/refine/synth/verify，经 cloudforge-cli 子进程调用 C++ 核心",
+  "description": "云铸（CloudForge）点云几何与当前模型核验工具集，经 AGH ToolContext 执行 C++ 核心与 CAD 检查",
   "exports": "./index.mjs",
   "agnes": {
     "plugins": [

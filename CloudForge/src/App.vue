@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { store, ui, initViewer, loadPointCloud, loadPointCloudFromPath, generateDemo, setViewMode, fitToCloud } from "./store";
+import { store, ui, initViewer, loadPointCloud, loadPointCloudFromPath, generateDemo, setViewMode, setCadWireframe, fitToCloud } from "./store";
 import TitleBar from "./components/TitleBar.vue";
 import SidePanel from "./components/SidePanel.vue";
 import Inspector from "./components/Inspector.vue";
@@ -11,7 +11,7 @@ const viewerEl = ref<HTMLElement | null>(null);
 
 onMounted(() => {
   if (viewerEl.value) initViewer(viewerEl.value);
-  // 命令行打开：`cloudforge.exe <点云文件>`（AGH 自动化预览用）
+  // 命令行打开：`cloudforge.exe <点云或 STL 文件>`（AGH 预览用）
   void invoke<string | null>("get_launch_file")
     .then((lf) => {
       if (lf) void loadPointCloudFromPath(lf);
@@ -43,7 +43,11 @@ const busyOverlay = computed(() => store.busy && (store.busyMessage !== "" || st
 
         <section class="center-pane">
           <div class="view-tools">
-            <div class="seg" role="tablist" aria-label="视图模式">
+            <div v-if="store.hasCad" class="seg" role="group" aria-label="CAD 显示模式">
+              <button :class="{ active: !store.cadWireframe }" :aria-pressed="!store.cadWireframe" :disabled="store.busy" @click="setCadWireframe(false)">实体</button>
+              <button :class="{ active: store.cadWireframe }" :aria-pressed="store.cadWireframe" :disabled="store.busy" @click="setCadWireframe(true)">线框</button>
+            </div>
+            <div v-else class="seg" role="tablist" aria-label="视图模式">
               <button
                 v-for="s in segs"
                 :key="s.id"
@@ -72,13 +76,13 @@ const busyOverlay = computed(() => store.busy && (store.busyMessage !== "" || st
             </div>
 
             <!-- 空态指引 -->
-            <div v-if="!store.hasCloud && !store.busy" class="empty-hint">
+            <div v-if="!store.hasCloud && !store.hasCad && !store.busy" class="empty-hint">
               <div class="empty-ring">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 2 3 7l9 5 9-5-9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" />
                 </svg>
               </div>
-              <p class="empty-title">尚未打开点云</p>
+              <p class="empty-title">尚未打开文件</p>
               <p class="empty-sub">支持 PCD / PLY / TXT / STL / OBJ / NuScenes BIN</p>
               <div class="empty-actions">
                 <button class="btn" @click="loadPointCloud">打开点云</button>

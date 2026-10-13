@@ -42,18 +42,32 @@ end tell`.trim()
 const windowsScript = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = $null
+$owner = $null
 try {
   Add-Type -AssemblyName System.Windows.Forms
+  [System.Windows.Forms.Application]::EnableVisualStyles()
+  $owner = [System.Windows.Forms.Form]::new()
+  $owner.Text = '选择 Agnes 工作区'
+  $owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+  $owner.ShowInTaskbar = $false
+  $owner.TopMost = $true
+  $owner.Opacity = 0
+  $owner.Show()
+  $owner.Activate()
   $dialog = [System.Windows.Forms.FolderBrowserDialog]::new()
   $dialog.Description = '选择 Agnes 工作区'
   $dialog.ShowNewFolderButton = $true
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
     $result = @{ status = 'selected'; path = $dialog.SelectedPath }
   } else {
     $result = @{ status = 'cancelled' }
   }
 } catch {
   $result = @{ status = 'unavailable' }
+} finally {
+  if ($null -ne $dialog) { $dialog.Dispose() }
+  if ($null -ne $owner) { $owner.Dispose() }
 }
 [Console]::Out.Write(($result | ConvertTo-Json -Compress))
 `.trim()
@@ -251,7 +265,9 @@ export function createNativeWorkspacePicker(options: NativeWorkspacePickerOption
   return {
     available: async () => (await backend()) !== undefined,
     pick: async (signal) => {
+      if (signal.aborted) return { status: 'cancelled' }
       const selected = await backend()
+      if (signal.aborted) return { status: 'cancelled' }
       if (!selected) return { status: 'unavailable' }
       try {
         return selected.decode(await run(selected.executable, selected.args, signal, childEnv))

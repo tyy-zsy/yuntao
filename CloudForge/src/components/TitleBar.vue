@@ -8,7 +8,7 @@ const isTauri = "__TAURI_INTERNALS__" in window;
 const win = isTauri ? getCurrentWindow() : null;
 
 const breadcrumb = computed(() => {
-  const file = store.sourceName || "尚未打开点云";
+  const file = store.sourceName || "尚未打开文件";
   return `CloudForge  /  ${file}`;
 });
 
@@ -34,11 +34,11 @@ function focusSearch() {
 
     <span class="spacer" data-tauri-drag-region></span>
 
-    <button class="btn ghost" :disabled="!ui.canSearch" @click="focusSearch">
+    <button v-if="!store.hasCad" class="btn ghost" :disabled="!ui.canSearch" @click="focusSearch">
       搜索 <kbd>Ctrl K</kbd>
     </button>
-    <button class="btn" :disabled="!ui.canExport" @click="exportResults">导出</button>
-    <button class="btn btn-primary ai-btn" :disabled="!ui.aiButtonEnabled" :title="aiTooltip" @click="startAi">
+    <button v-if="!store.hasCad" class="btn" :disabled="!ui.canExport" @click="exportResults">导出</button>
+    <button v-if="!store.hasCad" class="btn btn-primary ai-btn" :disabled="!ui.aiButtonEnabled" :title="aiTooltip" @click="startAi">
       <svg v-if="!store.aiRunning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="6 3 20 12 6 21 6 3" />
       </svg>

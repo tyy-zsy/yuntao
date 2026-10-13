@@ -31,7 +31,7 @@ function set<K extends keyof typeof store.settings>(key: K, value: (typeof store
     <template v-if="!collapsed">
       <p class="panel-title">
         <span class="dot" aria-hidden="true"></span>
-        点云实验室
+        {{ store.hasCad ? "CAD 预览" : "点云实验室" }}
       </p>
 
       <p class="section-title">工作区</p>
@@ -42,30 +42,31 @@ function set<K extends keyof typeof store.settings>(key: K, value: (typeof store
         </button>
         <button class="btn nav-btn" :disabled="!ui.canLoad" @click="loadPointCloud">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
-          点云文件
+          {{ store.hasCad ? "打开文件" : "点云文件" }}
         </button>
-        <button class="btn nav-btn" @click="navAI">
+        <button v-if="!store.hasCad" class="btn nav-btn" @click="navAI">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>
           AI 识别任务
         </button>
-        <button class="btn nav-btn" @click="navMeasurements">
+        <button v-if="!store.hasCad" class="btn nav-btn" @click="navMeasurements">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg>
           测量记录
         </button>
       </nav>
 
-      <p class="section-title">点云数据</p>
+      <p class="section-title">{{ store.hasCad ? "CAD 模型" : "点云数据" }}</p>
       <p class="cloud-info num">
-        <template v-if="store.hasCloud"><span class="info-dot ok" aria-hidden="true">●</span> {{ store.sourceName || "合成测试点云" }}<br /><span class="indent">{{ store.pointCount.toLocaleString("zh-CN") }} 个点</span></template>
+        <template v-if="store.hasCad"><span class="info-dot ok" aria-hidden="true">●</span> {{ store.sourceName }}<br /><span class="indent">{{ store.cadTriangleCount.toLocaleString("zh-CN") }} 个三角面</span></template>
+        <template v-else-if="store.hasCloud"><span class="info-dot ok" aria-hidden="true">●</span> {{ store.sourceName || "合成测试点云" }}<br /><span class="indent">{{ store.pointCount.toLocaleString("zh-CN") }} 个点</span></template>
         <template v-else><span class="info-dot" aria-hidden="true">●</span> 尚未加载文件</template>
       </p>
       <div class="row">
-        <button class="btn" :disabled="!ui.canLoad" @click="loadPointCloud">打开点云</button>
-        <button class="btn" :disabled="!ui.canSave" @click="savePointCloud">保存</button>
+        <button class="btn" :disabled="!ui.canLoad" @click="loadPointCloud">{{ store.hasCad ? "打开文件" : "打开点云" }}</button>
+        <button v-if="!store.hasCad" class="btn" :disabled="!ui.canSave" @click="savePointCloud">保存</button>
       </div>
 
-      <p class="section-title">识别设置</p>
-      <div class="settings">
+      <p v-if="!store.hasCad" class="section-title">识别设置</p>
+      <div v-if="!store.hasCad" class="settings">
         <select ref="profileEl" :value="store.settings.profile" :disabled="!ui.aiProfileEnabled" aria-label="AI 模型" @change="set('profile', ($event.target as HTMLSelectElement).value)">
           <option v-for="p in AI_PROFILES" :key="p.id" :value="p.id">{{ p.label }}</option>
         </select>
@@ -93,7 +94,7 @@ function set<K extends keyof typeof store.settings>(key: K, value: (typeof store
 
       <span class="stretch"></span>
 
-      <p class="env num"><span class="ok-dot" aria-hidden="true">●</span> 本地处理<br /><span class="indent">CloudForge · RANSAC</span></p>
+      <p class="env num"><span class="ok-dot" aria-hidden="true">●</span> 本地处理<br /><span class="indent">{{ store.hasCad ? "CloudForge · CAD 网格" : "CloudForge · RANSAC" }}</span></p>
     </template>
 
     <button class="btn-icon collapse" :aria-label="collapsed ? '展开侧栏' : '折叠侧栏'" @click="toggleCollapse">

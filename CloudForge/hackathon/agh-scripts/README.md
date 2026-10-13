@@ -7,6 +7,7 @@
 |---|---|
 | `bootstrap.mts` | 共用引导：定位 AGH → 动态加载官方 SDK → 连本机 daemon |
 | `install-package.mts` | 幂等安装/覆盖：disable → remove → inspect → install → trust → enable |
+| `update-cloudforge-tools.mts` | 经完整性与能力哈希检查更新工具包，保留已安装包；未安装时 install → trust → enable |
 | `remove-package.mts` | 卸载：disable（如已启用）→ remove |
 | `probe-roster.mts` | 诊断：客户端模块名册（entryUrl / slots / slotCatalogVersion / services） |
 | `probe-assets.mts` | 诊断：逐个读 client 资源，验证 daemon 能否返回（见下方「1 MiB 预算」） |
@@ -25,17 +26,19 @@ AGH 的 CLI 包管理命令（`agh package …`）要求 **TTY 交互确认**（
 找到后用**动态 import** 加载 `packages/sdk/src/*.ts`（静态 import 只有放在框架树内才解析得了）。
 
 ```powershell
-# 框架不在本仓库同级目录时才需要指定
-$env:AGH_ROOT = "E:/C++/Point/agnes-harness"
+# 从 CloudForge 项目根目录执行；框架不在同级目录时指定实际位置
+$env:AGH_ROOT = (Resolve-Path ../agnes-harness).Path
 # 可选：默认 local-dev
 $env:AGH_PROFILE = "local-dev"
 
-cd E:\C++\Point\CloudForge
-$tsx = "E:\C++\Point\agnes-harness\node_modules\.bin\tsx.cmd"
+$tsx = "../agnes-harness/node_modules/.bin/tsx.cmd"
 
 # 装 / 卸
 & $tsx hackathon\agh-scripts\install-package.mts "file:./hackathon/cloudforge-panel" "cloudforge-panel"
 & $tsx hackathon\agh-scripts\remove-package.mts cloudforge-panel
+
+# 已安装 CloudForge 工具包时，优先保留包并更新；不启动模型或实际核验
+& $tsx hackathon\agh-scripts\update-cloudforge-tools.mts
 
 # 诊断（只读）
 & $tsx hackathon\agh-scripts\probe-roster.mts

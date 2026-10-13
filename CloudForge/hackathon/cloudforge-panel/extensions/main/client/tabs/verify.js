@@ -1,11 +1,9 @@
 // 云铸面板 · 验证页签
-// 三块真实证据，不做任何编造：
-//   ① 回归套件 11 项（normal 3 / boundary 3 / failure 5），detail 原文直出
-//   ② verify 实跑：真值 vs 实测，参数误差 mm / 角误差 °，1e+30 哨兵显示为 —
-//   ③ 鲁棒性 12 格热力：格 = σ × 保留率，颜色 = verify_pass，格内标平面误差 mm
-// 点"查看"会切到点云页并高亮该基元（跨页签联动）。
+// 当前模型的核验由本会话 AGH 组织并调用正式工具，面板只准备任务和读取结果。
+// 合成回归与鲁棒性网格是可折叠的历史证据，不作为当前文件的通过结论。
 
-import { el, num, mmOrDash, ms, typeCn, esc } from '../ui.js'
+import { el, num, mmOrDash } from '../ui.js'
+import { pickNativeFile } from '../pick.js'
 
 const GROUPS = [
   { id: 'normal', label: '常规链路' },
@@ -18,18 +16,394 @@ export function createVerifyTab({ ctx, data, state }) {
   const scroll = el('div', { class: 'cf-scroll' })
   root.appendChild(scroll)
 
+  const currentBox = el('div', { class: 'cf-list' })
+  const sourceLabel = el('div', { class: 'cf-cloud-source' })
+  const scopeNote = el('div', { class: 'cf-note' }, '由当前 AGH 会话组织核验并调用 CloudForge 工具；没有匹配真值时，只报告模型检查，不宣称真实精度已验证。')
+  const tolerance = el('input', { type: 'number', min: '0.001', max: '1000', step: '1', value: '5', 'aria-label': '参数容差（毫米）' })
+  const angle = el('input', { type: 'number', min: '0.001', max: '90', step: '1', value: '2', 'aria-label': '角度容差（度）' })
+  const thresholdRow = el('div', { class: 'cf-verify-thresholds' }, [
+    el('label', {}, ['参数容差（mm） ', tolerance]), el('label', {}, ['角度容差（°） ', angle]),
+  ])
+  const referenceLabel = el('div', { class: 'cf-note' })
+  const referenceBtn = el('button', { class: 'cf-btn-sm', text: '选择真值 JSON' })
+  const clearReferenceBtn = el('button', { class: 'cf-btn-sm', text: '清除参考' })
+  const referenceStatus = el('span', { class: 'cf-pick-note', role: 'status', 'aria-live': 'polite' })
+  const referenceControls = el('div', { class: 'cf-foot-row' }, [referenceBtn, clearReferenceBtn])
+  const referenceNote = el('div', { class: 'cf-note', text: '真值 JSON 应对应当前点云，使用相同单位和坐标系，并包含标准 shapes。用户选定的参考由 AGH 工具检查与对比。' })
+  const runBtn = el('button', { class: 'cf-primary-btn', text: '让 AGH 验证当前模型' })
+  const progress = el('div', { class: 'cf-note', role: 'status', 'aria-live': 'polite' })
+  const retryBtn = el('button', { class: 'cf-btn-sm hidden', text: '重试查询进度' })
+  const resumeBtn = el('button', { class: 'cf-btn-sm hidden', text: '继续交给 AGH' })
+  const historyBox = el('div', { class: 'cf-note hidden' })
   const suiteBox = el('div', { class: 'cf-list' })
   const checkBox = el('div', { class: 'cf-list' })
   const heatBox = el('div', {})
   const verdictBox = el('div', { class: 'cf-note' })
 
-  scroll.appendChild(title('回归套件'))
-  scroll.appendChild(suiteBox)
-  scroll.appendChild(title('真值验证（现跑 cloudforge verify）'))
+  scroll.appendChild(title('当前点云与 CAD 核验'))
+  currentBox.append(sourceLabel, scopeNote, thresholdRow, referenceLabel, referenceControls, referenceStatus, referenceNote, runBtn, progress, retryBtn, resumeBtn, historyBox)
+  scroll.appendChild(currentBox)
   scroll.appendChild(checkBox)
-  scroll.appendChild(title('鲁棒性网格 · 噪声 σ × 保留率'))
-  scroll.appendChild(heatBox)
-  scroll.appendChild(verdictBox)
+  const historical = el('details', {}, [el('summary', { class: 'cf-group-title', text: '算法回归证据（历史基准，不代表当前文件）' })])
+  historical.append(title('回归套件'), suiteBox, title('鲁棒性网格 · 噪声 σ × 保留率'), heatBox, verdictBox)
+  scroll.appendChild(historical)
+
+  let visible = false
+  let destroyed = false
+  let currentKey = null
+  let recovering = false
+  let submitting = null
+  let controller = null
+  let polling = null
+  let recoveryError = null
+  let historicalLoaded = false
+  let referenceBaseKey = null
+  let truthPath = null
+  let referenceKind = 'none'
+  let pickingReference = false
+  let savedSelection = null
+  const jobs = new Map()
+  const storageKey = `cf:${ctx.session?.sessionId ?? 'default'}:verify-jobs`
+  const selectionKey = `cf:${ctx.session?.sessionId ?? 'default'}:verify-reference`
+  try {
+    savedSelection = JSON.parse(sessionStorage.getItem(selectionKey) || 'null')
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || '[]')
+    for (const job of Array.isArray(saved) ? saved.slice(-10) : []) {
+      if (job && typeof job.key === 'string' && typeof job.id === 'string') {
+        // 页面重载不等价于提交失败；先恢复后台状态，再决定是否可继续交互。
+        job.sending = false
+        job.pollError = null
+        jobs.set(job.key, job)
+      }
+    }
+  } catch { /* 私密模式不影响后台请求恢复 */ }
+
+  runBtn.addEventListener('click', () => void startVerify())
+  referenceBtn.addEventListener('click', () => void selectReference())
+  clearReferenceBtn.addEventListener('click', () => {
+    if (pickingReference || submitting || pending(currentJob())) return
+    truthPath = null
+    referenceKind = 'none'
+    saveSelection(context())
+    renderCurrent(); state.notify?.()
+  })
+  for (const input of [tolerance, angle]) input.addEventListener('change', () => {
+    saveSelection(context())
+    renderCurrent(); state.notify?.()
+  })
+  historical.addEventListener('toggle', () => {
+    if (!historical.open || historicalLoaded || destroyed) return
+    historicalLoaded = true
+    void data.suite().then((value) => {
+      if (destroyed) return
+      state.suite = value
+      renderSuite(); renderHeat()
+    }).catch((error) => {
+      if (destroyed) return
+      historicalLoaded = false
+      verdictBox.textContent = `历史基准读取失败：${String(error.message || error)}`
+    })
+  })
+  retryBtn.addEventListener('click', () => {
+    const job = currentJob()
+    recoveryError = null
+    if (job) { job.pollError = null; void resumePolling(job) }
+    else void recover()
+    renderCurrent()
+  })
+  resumeBtn.addEventListener('click', () => {
+    const job = currentJob()
+    if (job?.request) void handoff(job)
+    else void startVerify({ retry: true })
+  })
+
+  const pathKey = (value) => String(value || '').replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+  const samePath = (a, b) => !!a && !!b && pathKey(a) === pathKey(b)
+  const basename = (value) => String(value || '').split(/[\\/]/).pop()
+  function context() {
+    const source = state.cloudOverride || state.cloudPath || state.sceneCache?.sourceCloud || state.sceneCache?.source_cloud || state.workflow?.sourceCloud || null
+    const wf = state.workflow
+    const wfSource = wf?.sourceCloud || state.sceneCache?.sourceCloud || state.sceneCache?.source_cloud
+    const resultDir = wf && (samePath(source, wfSource) || !state.cloudOverride && !wfSource) ? wf.dir : null
+    const value = { sourceCloud: source, resultDir, sceneId: state.sceneId, sessionId: ctx.session?.sessionId || null }
+    value.baseKey = JSON.stringify([pathKey(source), pathKey(resultDir), value.sceneId, value.sessionId])
+    if (referenceBaseKey !== value.baseKey) {
+      referenceBaseKey = value.baseKey
+      // 参考只属于捕获的源与工作流，切换到其他输入时清除旧参考。
+      truthPath = resultDir && typeof wf?.truthPath === 'string' ? wf.truthPath : null
+      referenceKind = truthPath ? 'workflow' : 'none'
+      if (savedSelection?.baseKey === value.baseKey) {
+        truthPath = typeof savedSelection.truthPath === 'string' && savedSelection.truthPath ? savedSelection.truthPath : null
+        referenceKind = truthPath ? savedSelection.referenceKind === 'workflow' ? 'workflow' : 'user' : 'none'
+        if (Number(savedSelection.parameterMm) > 0 && Number(savedSelection.parameterMm) <= 1000) tolerance.value = String(savedSelection.parameterMm)
+        if (Number(savedSelection.angleDeg) > 0 && Number(savedSelection.angleDeg) <= 90) angle.value = String(savedSelection.angleDeg)
+      }
+      savedSelection = null
+      referenceStatus.textContent = ''
+      referenceStatus.classList.remove('on')
+    }
+    value.truthPath = truthPath
+    value.referenceKind = referenceKind
+    value.thresholds = { parameter_tolerance_m: Number(tolerance.value) / 1000, angle_tolerance_deg: Number(angle.value) }
+    value.key = JSON.stringify([value.baseKey, pathKey(truthPath), value.thresholds.parameter_tolerance_m, value.thresholds.angle_tolerance_deg])
+    return value
+  }
+  function saveSelection(captured) {
+    try { sessionStorage.setItem(selectionKey, JSON.stringify({ baseKey: captured.baseKey, truthPath, referenceKind, parameterMm: Number(tolerance.value), angleDeg: Number(angle.value) })) } catch { /* 忽略 */ }
+  }
+  async function selectReference() {
+    const captured = context()
+    if (destroyed || pickingReference || submitting || pending(currentJob())) return
+    pickingReference = true
+    let accepted = false
+    const choosing = pickNativeFile({ data, exts: ['json'], btn: referenceBtn, statusEl: referenceStatus, onPicked: (picked) => {
+      if (destroyed || context().key !== captured.key || context().baseKey !== captured.baseKey) return
+      accepted = true
+      truthPath = picked.path
+      referenceKind = 'user'
+      saveSelection(captured)
+      renderCurrent(); state.notify?.()
+    } })
+    renderCurrent(); state.notify?.()
+    try { await choosing } finally {
+      pickingReference = false
+      if (!destroyed) {
+        if (!accepted && context().key !== captured.key) {
+          referenceStatus.textContent = '当前模型或参数已改变，本次选择未用于当前模型'
+          referenceStatus.classList.add('on')
+        }
+        renderCurrent(); state.notify?.()
+        if (visible) void recover()
+      }
+    }
+  }
+  function validThresholds(value) {
+    return Number.isFinite(value.parameter_tolerance_m) && value.parameter_tolerance_m > 0 && value.parameter_tolerance_m <= 1
+      && Number.isFinite(value.angle_tolerance_deg) && value.angle_tolerance_deg > 0 && value.angle_tolerance_deg <= 90
+  }
+  function statusInput(captured, job) {
+    return {
+      job: job?.id || undefined, session_id: captured.sessionId,
+      source_cloud: captured.sourceCloud, result_dir: captured.resultDir || undefined,
+      scene_id: captured.sceneId || undefined, truth_path: captured.truthPath || '',
+      ...captured.thresholds,
+    }
+  }
+  function currentJob() { return jobs.get(context().key) || null }
+  function save() {
+    try { sessionStorage.setItem(storageKey, JSON.stringify([...jobs.values()].slice(-10))) } catch { /* 忽略 */ }
+  }
+  function statusLabel(job) {
+    const labels = { queued: '等待 AGH 调用验证工具', running: 'AGH 正在执行验证', pass: 'PASS · 当前模型检查通过', fail: 'FAIL · 当前模型检查未通过', partial: '检查已完成 · 缺少真实精度参考', error: '验证执行失败', stale: '输入已改变 · 该结果已失效' }
+    return labels[job?.state] || '验证未运行'
+  }
+  function pending(job) { return !!job && !job.done && !['error', 'stale', 'pass', 'fail', 'partial'].includes(job.state) }
+  function renderCurrent() {
+    if (destroyed) return
+    const captured = context()
+    if (currentKey !== captured.key) {
+      currentKey = captured.key
+      recoveryError = null
+      controller?.abort()
+      if (visible) void recover()
+    }
+    const job = jobs.get(captured.key)
+    const busy = submitting || pending(job)
+    sourceLabel.textContent = captured.sourceCloud ? `当前点云：${basename(captured.sourceCloud)}` : '请先在点云页选择要验证的文件'
+    sourceLabel.title = captured.sourceCloud || ''
+    runBtn.disabled = !captured.sourceCloud || !captured.resultDir || !captured.sessionId || !validThresholds(captured.thresholds) || busy || recovering || pickingReference
+    runBtn.textContent = busy ? statusLabel(job) : job?.done ? '重新验证当前模型' : '让 AGH 验证当前模型'
+    tolerance.disabled = angle.disabled = busy || pickingReference
+    referenceBtn.disabled = clearReferenceBtn.disabled = busy || pickingReference
+    clearReferenceBtn.disabled ||= !captured.truthPath
+    referenceLabel.textContent = captured.truthPath ? `精度参考：${basename(captured.truthPath)}（${captured.referenceKind === 'workflow' ? '当前工作流显式真值' : '用户选定参考'}）` : '精度参考：未选择；仅执行模型检查'
+    referenceLabel.title = captured.truthPath || ''
+    progress.textContent = !captured.sessionId ? '请打开一个 AGH 会话后提交验证。' : !captured.resultDir ? '当前点云没有匹配的检测结果，请先在点云页“开始检测”，再提交验证。' : !validThresholds(captured.thresholds) ? '参数容差应大于 0 且不超过 1000 mm；角度容差应大于 0 且不超过 90°' : recoveryError || job?.prepareError || job?.sendError || job?.pollError || job?.stage || statusLabel(job)
+    retryBtn.classList.toggle('hidden', !(recoveryError || job?.pollError))
+    resumeBtn.classList.toggle('hidden', !job || job.done || job.sending || !(job.prepareError || job.sendError || job.canResume))
+    resumeBtn.textContent = job?.prepareError ? '重试准备验证任务' : '继续交给 AGH'
+    const previous = [...jobs.values()].filter((item) => item.key !== captured.key).at(-1)
+    historyBox.classList.toggle('hidden', !previous)
+    historyBox.textContent = previous ? `历史任务：${basename(previous.sourceCloud)} · 参考 ${basename(previous.truthPath) || '无'} · ${statusLabel(previous)}。恢复该点云、工作流、参考和阈值可查看；历史结果不会覆盖当前模型。` : ''
+    renderChecks()
+  }
+
+  function applyStatus(job, value) {
+    if (!value || value.ok === false && !value.done) throw new Error(value?.reason || value?.error || '暂未取得验证状态')
+    job.state = value.state || value.status || job.state
+    job.done = Boolean(value.done || ['pass', 'fail', 'partial', 'error', 'stale'].includes(job.state))
+    job.request = value.request || job.request
+    job.stage = value.reason || value.stage || value.summary || statusLabel(job)
+    job.result = value.result || job.result
+    job.reportPath = value.reportPath || job.reportPath
+    job.verifyPath = value.verifyPath || job.verifyPath
+    if (job.done) { job.canResume = false; job.sendError = null; job.prepareError = null }
+    job.pollError = null
+    save()
+    if (context().key === job.key) { renderCurrent(); state.notify?.() }
+  }
+
+  async function recover() {
+    const captured = context()
+    if (destroyed || !visible || !captured.sourceCloud || !captured.resultDir || !captured.sessionId || !validThresholds(captured.thresholds) || recovering || submitting || pickingReference) return
+    const saved = jobs.get(captured.key)
+    if (saved?.id && pending(saved)) { void resumePolling(saved); return }
+    recovering = true
+    try {
+      const value = await data.verifyStatus(statusInput(captured, saved))
+      if (destroyed || !visible || context().key !== captured.key) return
+      if (value?.job) {
+        const job = saved || { ...captured, id: value.job, requestId: value.job, state: 'queued', done: false }
+        jobs.set(captured.key, job)
+        applyStatus(job, value)
+        if (pending(job)) void resumePolling(job)
+      } else if (value?.ok === false) throw new Error(value.reason || value.error || '验证任务恢复失败')
+    } catch (error) {
+      if (!destroyed && context().key === captured.key) recoveryError = `状态读取失败：${String(error.message || error)}`
+    } finally {
+      recovering = false
+      if (!destroyed) {
+        renderCurrent(); state.notify?.()
+        if (visible && context().key !== captured.key) void recover()
+      }
+    }
+  }
+
+  async function startVerify({ retry = false } = {}) {
+    const captured = context()
+    const old = jobs.get(captured.key)
+    if (destroyed || submitting || pickingReference || !captured.sourceCloud || !captured.resultDir || !captured.sessionId || !retry && pending(old)) return
+    const parameterTolerance = Number(tolerance.value) / 1000
+    const angleTolerance = Number(angle.value)
+    if (!validThresholds({ parameter_tolerance_m: parameterTolerance, angle_tolerance_deg: angleTolerance })) {
+      progress.textContent = '参数容差应大于 0 且不超过 1000 mm；角度容差应大于 0 且不超过 90°'
+      return
+    }
+    const job = retry && old?.prepareError ? old : { ...captured, requestId: crypto.randomUUID(), id: null, state: 'queued', done: false, thresholds: { parameter_tolerance_m: parameterTolerance, angle_tolerance_deg: angleTolerance } }
+    job.prepareError = job.sendError = null
+    job.stage = '正在准备当前模型的验证任务…'
+    submitting = job
+    jobs.set(captured.key, job)
+    renderCurrent(); state.notify?.()
+    try {
+      const value = await data.runEffect('cloudforge.verify.agh', {
+        source_cloud: job.sourceCloud, result_dir: job.resultDir || undefined,
+        session_id: job.sessionId, scene_id: job.sceneId, request_id: job.requestId,
+        truth_path: job.truthPath || '',
+        ...job.thresholds,
+      })
+      if (destroyed) return
+      if (!value?.job || !value?.request || value.ok === false && !value.done) throw new Error(value?.reason || value?.error || '未能准备验证任务')
+      job.id = value.job
+      job.request = value.request
+      job.actualTruthPath = value.truthPath || null
+      job.cadPath = value.cadPath || null
+      applyStatus(job, value)
+      if (submitting === job) submitting = null
+      if (!job.done) await handoff(job)
+    } catch (error) {
+      if (!destroyed) {
+        job.prepareError = `验证尚未开始：${String(error.message || error)}`
+        job.stage = job.prepareError
+        save()
+      }
+    } finally {
+      if (submitting === job) submitting = null
+      if (!destroyed) { renderCurrent(); state.notify?.() }
+    }
+  }
+
+  function taskPrompt(job) {
+    return [
+      '请组织并执行 CloudForge 当前模型验证。用户已在控制台点击“让 AGH 验证当前模型”。',
+      `固定任务文件（相对 CloudForge 项目根目录）：${JSON.stringify(job.request)}`,
+      `当前点云：${JSON.stringify(job.sourceCloud)}；检测目录：${JSON.stringify(job.resultDir)}；场景：${JSON.stringify(job.sceneId)}。`,
+      `精度参考：${JSON.stringify(job.truthPath)}（${job.referenceKind === 'user' ? '用户选定参考，需核实适用范围与关联' : job.referenceKind === 'workflow' ? '当前工作流显式真值' : '未提供真值'}）；参数容差 ${job.thresholds.parameter_tolerance_m} m，角度容差 ${job.thresholds.angle_tolerance_deg}°。`,
+      '执行顺序：1. 读取任务 JSON，调用 cloudforge_cloud_info 检查任务中的点云；2. 调用 cloudforge_verify_current，参数 request 严格使用上述任务文件路径，由该工具执行实际核验并保存结构化结果和报告；3. 读取工具返回的 verificationResultPath / reportPath，解释每项实际检查、异常和建议。',
+      '不要把验证改成其他点云或合成案例，不要用算法回归绿勾代替当前模型核验，不要编造通过。没有匹配真值时必须说明尚未验证真实精度；CAD 不存在或无法校验时如实报告。',
+      '任务文件的来源、CAD、真值、阈值已固定；已完成的同一 request 直接读取结果，避免重复执行。若工具不可用、执行失败或等待权限，明确告诉用户，并保持该任务待处理。',
+      '完成后按当前场景解释 PASS / FAIL / 缺少参考，不把 missing-reference 说成 PASS；页面将自动读取同一任务的结果。',
+    ].join('\n')
+  }
+
+  async function handoff(job) {
+    if (destroyed || job.sending || job.done || !job.request || ctx.session?.sessionId !== job.sessionId) return
+    job.sending = true
+    job.canResume = false
+    job.sendError = null
+    job.stage = '正在将验证任务提交到当前 AGH 会话…'
+    renderCurrent(); state.notify?.()
+    if (visible && context().key === job.key) void resumePolling(job)
+    try {
+      const receipt = await data.prompt(taskPrompt(job), { handoff: true, sessionId: job.sessionId, commandId: `cloudforge-verify-${job.requestId}` })
+      if (destroyed) return
+      if (!job.done && job.state !== 'running') job.stage = receipt.queued ? '已加入 AGH 下一轮，等待 AGH 调用验证工具' : '正在请求 AGH 执行，等待验证工具启动'
+      save(); renderCurrent(); state.notify?.()
+      if (receipt.completion) {
+        const result = await receipt.completion
+        if (!destroyed && !job.done && job.state !== 'running') {
+          job.canResume = true
+          job.stage = result?.reason === 'completed' ? 'AGH 本轮已结束，尚未取得工具验证结果；可继续交给 AGH' : `AGH 本轮已停止（${result?.reason || '未知原因'}），验证仍待执行`
+        }
+      }
+    } catch (error) {
+      if (!destroyed && !job.done) job.sendError = `AGH 提交状态待确认：${String(error.message || error)}。可查询状态后继续同一任务。`
+    } finally {
+      job.sending = false
+      save()
+      if (!destroyed) { renderCurrent(); state.notify?.() }
+    }
+  }
+
+  function delay(ms, signal) {
+    return new Promise((resolve, reject) => {
+      const onAbort = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); reject(signal.reason) }
+      const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve() }, ms)
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) onAbort()
+    })
+  }
+  function resumePolling(job) {
+    if (destroyed || !visible || !job?.id || job.done || job.pollError || polling) return polling
+    const activeController = new AbortController()
+    controller = activeController
+    const { signal } = activeController
+    polling = (async () => {
+      let failures = 0
+      while (!signal.aborted && !destroyed && visible && context().key === job.key && !job.done) {
+        try {
+          const value = await data.verifyStatus(statusInput(job, job), { signal })
+          signal.throwIfAborted()
+          applyStatus(job, value)
+          failures = 0
+          if (job.done) return
+          // 排队确认不是工具调用；恢复后空闲的会话可继续同一请求。
+          if (job.state === 'queued' && !job.sending) {
+            const projection = await data.projection()
+            signal.throwIfAborted()
+            const view = projection?.value || projection
+            if (view && 'opState' in view && !view.opState) job.canResume = true
+            renderCurrent()
+          }
+          await delay(1500, signal)
+        } catch (error) {
+          if (signal.aborted || destroyed) return
+          if (++failures >= 3) throw error
+          await delay(1500, signal)
+        }
+      }
+    })().catch((error) => {
+      if (!destroyed && !signal.aborted) { job.pollError = `进度暂未更新：${String(error.message || error)}`; renderCurrent(); state.notify?.() }
+    }).finally(() => {
+      if (controller === activeController) controller = null
+      polling = null
+      if (!destroyed && visible) {
+        if (context().key !== job.key) void recover()
+        else if (signal.aborted && pending(job) && !job.pollError) void resumePolling(job)
+      }
+    })
+    return polling
+  }
 
   function title(t) {
     return el('div', { class: 'cf-group-title', text: t })
@@ -66,43 +440,55 @@ export function createVerifyTab({ ctx, data, state }) {
 
   function renderChecks() {
     checkBox.replaceChildren()
-    const v = state.verifyResult
-    if (!v) {
-      checkBox.appendChild(el('div', { class: 'cf-empty' }, '选择一个带真值的检测结果以验证（点下方按钮）'))
+    const job = currentJob()
+    const v = job?.result
+    if (job?.state === 'stale') {
+      checkBox.appendChild(el('div', { class: 'cf-empty' }, '点云、检测结果或交付物已改变。之前的验证结论不适用于当前输入，请重新验证。'))
       return
     }
-    if (v.ok === false) {
-      checkBox.appendChild(el('div', { class: 'cf-empty' }, v.error || '验证未执行'))
+    if (!v) {
+      checkBox.appendChild(el('div', { class: 'cf-empty' }, pending(job) ? '等待 AGH 实际调用验证工具；准备任务或加入下一轮还不代表验证完成。' : '提交当前模型后，这里显示实际检查结果与报告。'))
       return
     }
     checkBox.appendChild(
       el('div', { class: 'cf-kv' }, [
         el('span', { text: '结论' }),
-        el('span', { class: `mono ${v.pass ? 'ok-text' : 'err-text'}`, text: v.pass ? `PASS（${v.matched}/${v.total} 匹配）` : `FAIL（${v.matched}/${v.total}）` }),
+        el('span', { class: `mono ${job.state === 'pass' ? 'ok-text' : job.state === 'fail' || job.state === 'error' ? 'err-text' : ''}`, text: statusLabel(job) }),
       ]),
     )
-    checkBox.appendChild(
-      el('div', { class: 'cf-kv' }, [
-        el('span', { text: '阈值' }),
-        el('span', { class: 'mono', text: `参数 ${mmOrDash(v.tolerance)} · 角度 ${v.angle_tolerance_deg}°` }),
-      ]),
-    )
+    if (v.summary) checkBox.appendChild(el('div', { class: 'cf-note', text: v.summary }))
+    checkBox.appendChild(el('div', { class: 'cf-note', text: v.precisionVerified ? '真实精度：已使用匹配真值对比' : '真实精度：尚未验证；现有检查不等同于与标准答案一致' }))
+    if (v.thresholds) checkBox.appendChild(el('div', { class: 'cf-kv' }, [
+      el('span', { text: '本次阈值' }),
+      el('span', { class: 'mono', text: `参数 ${mmOrDash(v.thresholds.parameterToleranceM ?? v.thresholds.parameter_tolerance_m)} · 角度 ${v.thresholds.angleToleranceDeg ?? v.thresholds.angle_tolerance_deg ?? '—'}°` }),
+    ]))
+    const labels = { pass: '通过', fail: '未通过', skipped: '未执行', 'missing-reference': '缺少参考', error: '执行失败' }
     for (const c of v.checks ?? []) {
+      const pass = c.status === 'pass'
+      const fail = c.status === 'fail' || c.status === 'error'
       const row = el('div', { class: 'cf-check' }, [
-        el('span', { class: `cf-dot-ico ${c.pass ? 'ok' : 'err'}`, text: c.pass ? '✓' : '✗' }),
-        el('span', { class: 'cf-check-name', text: `真值#${c.truth_id} ${typeCn(c.type)}${c.match === 'generalized' ? '（泛化匹配）' : ''}` }),
-        el('span', { class: 'cf-check-val', text: `Δ ${mmOrDash(c.param_error)} · ${(c.angle_error_deg ?? 0).toFixed(3)}°` }),
+        el('span', { class: `cf-dot-ico ${pass ? 'ok' : fail ? 'err' : ''}`, text: pass ? '✓' : fail ? '✗' : '—' }),
+        el('span', { class: 'cf-check-name', text: c.label || c.name || c.id || '检查项' }),
+        el('span', { class: 'cf-check-val', text: `${labels[c.status] || c.status || '未确认'}${c.summary ? ` · ${c.summary}` : ''}` }),
       ])
-      row.classList.add('clickable')
-      row.addEventListener('click', () => {
-        // 跳到点云页并高亮对应检测形状
-        const shapeId = c.matched_shape
-        state.pendingHighlight = shapeId
-        window.__CF_DEBUG?.selectTab?.('cloud')
-        state.message = shapeId == null ? '' : `已定位检测形状 #${shapeId}`
-      })
+      if (c.metrics) row.title = `${c.summary || ''}\n${JSON.stringify(c.metrics, null, 2)}`
+      const shapeId = (c.shapeIds || []).find((id) => Number.isSafeInteger(id) && id >= 0 && (state.sceneCache?.shapes || []).some((shape) => shape.id === id))
+      if (shapeId != null) {
+        row.classList.add('clickable')
+        row.title += `\n点击定位检测基元 #${shapeId}`
+        row.addEventListener('click', () => {
+          if (context().key !== job.key) return
+          state.pendingHighlight = shapeId
+          window.__CF_DEBUG?.selectTab?.('cloud')
+          state.message = `已定位检测基元 #${shapeId}`
+        })
+      }
       checkBox.appendChild(row)
     }
+    for (const [name, path] of [['结构化结果', job.verifyPath], ['验证报告', job.reportPath]]) {
+      if (path) checkBox.appendChild(el('div', { class: 'cf-kv' }, [el('span', { text: name }), el('span', { class: 'mono', text: path, title: path })]))
+    }
+    if (v.executor?.tool) checkBox.appendChild(el('div', { class: 'cf-note', text: `执行工具：${v.executor.tool}。详细工具调用与解释可在当前 AGH 会话查看。` }))
   }
 
   /** 哨兵值：云铸用 1e+30 表示「未检出 / 拟合失控」，不是真实测量值。
@@ -150,65 +536,36 @@ function renderHeat() {
     verdictBox.textContent = rb.verdict ?? ''
   }
 
-  async function runVerify() {
-    // 优先用当前工作流；它没有真值时自动改用最近一条带真值的工作流，并在界面上说明
-    let wf = state.workflow
-    if (!wf?.truthPath) {
-      wf = (state.report?.workflows ?? []).find((w) => w.truthPath)
-      if (wf) {
-        state.message = `当前工作流无真值，改用 ${wf.name}（合成基准）`
-      }
-    }
-    if (!wf) {
-      state.message = '工作区没有带真值（*.truth.json）的检测结果，无法 verify'
-      return
-    }
-    const truth = wf.truthPath
-    state.message = `正在跑 verify：${wf.name}…`
-    try {
-      state.verifyResult = await data.verify(`${wf.dir}/result.json`, truth)
-      state.verifyTruth = truth
-      state.message = state.verifyResult?.pass
-        ? `verify PASS（${state.verifyResult.matched}/${state.verifyResult.total} 匹配）`
-        : `verify FAIL（${state.verifyResult?.matched ?? 0}/${state.verifyResult?.total ?? 0}）`
-    } catch (e) {
-      state.message = `verify 失败：${String(e.message || e).slice(0, 100)}`
-    }
-    renderChecks()
-  }
-
   return {
     el: root,
     activate() {
+      visible = true
+      renderCurrent()
+      void recover()
       renderSuite()
-      renderChecks()
       renderHeat()
     },
-    deactivate() {},
-    render() {},
+    deactivate() { visible = false; controller?.abort() },
+    render() { renderCurrent() },
     async refresh() {
-      try {
-        state.suite = await data.suite()
-      } catch (e) {
-        state.message = `套件读取失败：${String(e.message || e).slice(0, 80)}`
-      }
-      const wf = state.workflow
-      state.verifyTruth = wf?.truthPath ?? null
-      if (!state.verifyTruth) {
-        const cand = (state.report?.workflows ?? []).find((w) => w.truthPath)
-        if (cand) state.message = `「${wf?.name ?? '当前'}」无真值；点「跑 verify」将自动改用 ${cand.name}`
+      await recover()
+      if (historical.open && !historicalLoaded) {
+        try { state.suite = await data.suite(); historicalLoaded = true; renderSuite(); renderHeat() }
+        catch (error) { verdictBox.textContent = `历史基准读取失败：${String(error.message || error)}` }
       }
     },
-    renderFooter(foot, { state: st }) {
+    renderFooter(foot) {
       const row = el('div', { class: 'cf-foot-row' })
-      const v = st.verifyResult
-      row.appendChild(el('span', { class: 'mono', text: v?.pass ? `verify PASS ${v.matched}/${v.total}` : 'verify 未运行' }))
+      const job = currentJob()
+      row.appendChild(el('span', { class: 'mono', text: statusLabel(job) }))
       row.appendChild(el('span', { class: 'spacer' }))
-      const btn = el('button', { class: 'cf-btn-sm primary', text: '跑 verify' })
-      btn.addEventListener('click', () => void runVerify())
+      const btn = el('button', { class: 'cf-btn-sm primary', text: runBtn.textContent })
+      btn.disabled = runBtn.disabled
+      btn.addEventListener('click', () => void startVerify())
       row.appendChild(btn)
       foot.appendChild(row)
-      if (st.message) foot.appendChild(el('div', { class: 'cf-msg', text: st.message }))
+      if (job?.pollError || job?.sendError || job?.prepareError) foot.appendChild(el('div', { class: 'cf-msg', text: job.pollError || job.sendError || job.prepareError }))
     },
+    destroy() { destroyed = true; visible = false; controller?.abort() },
   }
 }

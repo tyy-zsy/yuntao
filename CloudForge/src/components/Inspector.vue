@@ -131,11 +131,22 @@ function onPresetChange(e: Event) {
 <template>
   <aside class="inspector">
     <div class="header">
-      <h2>识别结果</h2>
-      <span class="count num">{{ store.pointCountLabel }}</span>
+      <h2>{{ store.hasCad ? "模型信息" : "识别结果" }}</h2>
+      <span class="count num">{{ store.hasCad ? `${store.cadTriangleCount.toLocaleString("zh-CN")} 个三角面` : store.pointCountLabel }}</span>
     </div>
 
-    <div class="scroll">
+    <div v-if="store.hasCad" class="scroll">
+      <div class="details">
+        <h3 class="sel-title">{{ store.sourceName }}</h3>
+        <p class="detail-line num">STL 表面网格</p>
+        <p class="eyebrow">显示方式</p>
+        <p class="measurement">{{ store.cadWireframe ? "线框" : "实体表面与轮廓" }}</p>
+        <p class="eyebrow">查看模型</p>
+        <p class="measurement">滚轮：放大、缩小<br />左键拖动：旋转<br />右键或中键拖动：平移</p>
+        <p class="geometry">点击上方“回到全景”恢复完整模型视图。</p>
+      </div>
+    </div>
+    <div v-else class="scroll">
       <input
         ref="searchEl"
         v-model="store.searchQuery"

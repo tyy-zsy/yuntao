@@ -431,19 +431,28 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
         const controller = new AbortController()
         activePicker = controller
         const abort = (): void => controller.abort()
+        const disconnected = (): void => {
+          if (!response.writableFinished) abort()
+        }
         request.once('aborted', abort)
-        response.once('close', abort)
+        response.once('close', disconnected)
+        const aborted = new Promise<WorkspacePickerResult>((resolve) => {
+          controller.signal.addEventListener('abort', () => resolve({ status: 'unavailable' }), {
+            once: true,
+          })
+        })
+        // Bound the native dialog, including capability discovery, and terminate its subprocess
+        // through the same signal used for browser cancellation and launcher shutdown.
+        const timeout = setTimeout(abort, 120_000)
         try {
-          const available = (await options.workspacePicker?.available().catch(() => false)) ?? false
-          if (controller.signal.aborted && !response.writableEnded) return
-          if (!available || !options.workspacePicker) {
-            json(response, 503, { status: 'unavailable' })
-            return
-          }
-          const result = await options.workspacePicker
-            .pick(controller.signal)
-            .catch(() => ({ status: 'unavailable' }) as const)
-          if (controller.signal.aborted && !response.writableEnded) return
+          const operation = (async (): Promise<WorkspacePickerResult> => {
+            const available = (await options.workspacePicker?.available().catch(() => false)) ?? false
+            if (!available || !options.workspacePicker || controller.signal.aborted)
+              return { status: 'unavailable' }
+            return options.workspacePicker.pick(controller.signal)
+          })().catch(() => ({ status: 'unavailable' }) as const)
+          const result = await Promise.race([operation, aborted])
+          if (response.destroyed || response.writableEnded) return
           if (
             result.status === 'selected' &&
             (result.path.length === 0 ||
@@ -456,8 +465,9 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
           }
           json(response, result.status === 'unavailable' ? 503 : 200, result)
         } finally {
+          clearTimeout(timeout)
           request.removeListener('aborted', abort)
-          response.removeListener('close', abort)
+          response.removeListener('close', disconnected)
           if (activePicker === controller) activePicker = undefined
           pickerPending = false
         }

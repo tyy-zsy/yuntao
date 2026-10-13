@@ -38,6 +38,8 @@ Session and approval traffic uses the browser SDK's direct WebSocket connection 
 5. When approval is requested, check the current choices and scope. After submitting, wait for backend confirmation; a disappearing button alone does not prove execution.
 6. After clicking Stop, wait for the actual terminal state. A stop-request message only means cancellation has been requested.
 
+In the workspace dialog, **选择文件夹…** opens the system directory picker. If it does not appear, cancel the dialog or expand the manual path field and enter the directory; both stop the pending picker. A picker that has not completed within two minutes closes and offers manual entry. A late picker reply never replaces a path you entered manually. The selected or entered directory is still validated by the backend before use.
+
 Choose **思考 · 上下文** beside the composer model picker to set reasoning intensity and context budget for this session. The choices reflect the selected model's supported levels. Enter a full token count or an explicit `K`/`M` suffix: `100K` means 100,000 tokens, while `100` means 100 tokens and is too small for ordinary models. Leave the budget empty to restore automatic sizing. Applying saves the settings for subsequent requests and reopening. Account settings provide defaults for new sessions. Existing sessions keep their saved settings when those defaults change.
 
 Failed turns show the recorded error code and message below their status, even when the process is collapsed. These details remain available after reopening the session. Older records without error details are labeled explicitly.
@@ -55,6 +57,8 @@ Fold turns or tool calls, search the records, or load earlier history as needed.
 Settings manages model accounts, plugins, Skills/MCP, appearance, and Computer Use. Available actions depend on backend capabilities and permissions. Installed plugins still require trust and enablement; see [plugin management](packages.md). Reopen history from the sidebar, or use the archive view for archived tasks. Archiving does not delete session history.
 
 Computer Use shows driver status, system permissions, diagnostics, and maintenance progress. Switching settings pages keeps progress monitoring active. When the pane is replaced or reloaded, it reads the latest operation without resubmitting it. Removing the pane stops local monitoring; use Cancel explicitly to request backend cancellation and wait for confirmation. A connection error or a long wait does not confirm completion or cancellation.
+
+Plugin interfaces separately read the daemon roster and load trusted snapshots. A connected backend does not mean that every plugin interface has loaded. A failed roster read preserves existing interfaces and retries at most five times, after 0.5, 1.5, 3, 6, and 10 seconds; success resets the retry budget. These retries reread the authoritative roster and do not rerun failed initialization of the same plugin revision. If a panel is still missing, refresh the page and inspect its enablement, trust, and runtime state in plugin settings.
 
 To add MCP, describe the integration in chat and supply a service address or connection details, then inspect it in settings. New services must be trusted and enabled in sequence; see [MCP integration](mcp.md). Use the SecretRef configuration flow for credentials.
 

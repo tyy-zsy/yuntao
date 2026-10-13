@@ -259,3 +259,13 @@ pub struct AiResultPlus {
     pub instances: Vec<crate::result_reader::AiInstance>,
     pub count: usize,
 }
+
+/// 加载 STL 的完整表面：每个三角面 9 个小端 f32，原始字节传输。
+/// 独立于点云状态，读取和解析不阻塞 Tauri 命令线程。
+#[tauri::command]
+pub async fn load_cad_mesh(path: String) -> Result<Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || crate::cad_mesh::load(&path))
+        .await
+        .map_err(|e| format!("CAD 网格加载任务失败：{e}"))??;
+    Ok(Response::new(bytes))
+}

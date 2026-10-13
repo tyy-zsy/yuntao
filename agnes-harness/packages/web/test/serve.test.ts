@@ -550,6 +550,73 @@ it('claims the workspace picker single-flight before awaiting capability', async
   }
 })
 
+it.each(['cancel', 'timeout'] as const)(
+  'releases an unresponsive picker after %s so it can be retried',
+  async (action) => {
+    const root = await mkdtemp(join(tmpdir(), 'agnes-web-picker-recovery-'))
+    const port = await availablePort()
+    let started: (() => void) | undefined
+    const pickerStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let observedAbort = false
+    let pickCalls = 0
+    let deadline: (() => void) | undefined
+    const schedule = setTimeout
+    const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation((...args) => {
+      const [callback, delay] = args
+      if (delay === 120_000) deadline = () => callback()
+      return schedule(...args)
+    })
+    const server = await createWebServer({
+      root,
+      wsUrl: 'ws://127.0.0.1:4319',
+      port,
+      origin: `http://127.0.0.1:${port}`,
+      workspacePicker: {
+        available: async () => true,
+        pick: (signal) => {
+          if (++pickCalls > 1) return Promise.resolve({ status: 'cancelled' })
+          signal.addEventListener(
+            'abort',
+            () => {
+              observedAbort = true
+            },
+            { once: true },
+          )
+          started?.()
+          return new Promise(() => {})
+        },
+      },
+    })
+    const controller = new AbortController()
+    const headers = { Origin: server.url }
+    try {
+      const pending = fetch(`${server.url}/api/workspace-picker`, {
+        method: 'POST',
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await pickerStarted
+      if (action === 'cancel') controller.abort()
+      else deadline?.()
+      const result = await pending
+      if (action === 'timeout') {
+        expect(result?.status).toBe(503)
+        await expect(result?.json()).resolves.toEqual({ status: 'unavailable' })
+      }
+      await vi.waitFor(() => expect(observedAbort).toBe(true))
+      const retry = await fetch(`${server.url}/api/workspace-picker`, { method: 'POST', headers })
+      expect(retry.status).toBe(200)
+      await expect(retry.json()).resolves.toEqual({ status: 'cancelled' })
+    } finally {
+      timer.mockRestore()
+      await server.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+)
+
 it('aborts an in-flight workspace picker when the Web server closes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agnes-web-picker-abort-'))
   const port = await availablePort()
@@ -568,13 +635,12 @@ it('aborts an in-flight workspace picker when the Web server closes', async () =
     workspacePicker: {
       available: async () => true,
       pick: (signal) =>
-        new Promise((resolve) => {
+        new Promise(() => {
           started?.()
           signal.addEventListener(
             'abort',
             () => {
               observedAbort = true
-              resolve({ status: 'unavailable' })
             },
             { once: true },
           )

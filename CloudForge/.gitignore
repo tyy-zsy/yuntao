@@ -34,3 +34,4 @@ demo_detect/
 hackathon/demo-data/**/preview.stl
 hackathon/demo-data/**/preview.stl.json
 .playwright-mcp/
+.venv-cad/

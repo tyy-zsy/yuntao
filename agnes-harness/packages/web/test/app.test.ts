@@ -1319,6 +1319,74 @@ describe('web session selection', () => {
     )
   })
 
+  it.each(['cancel', 'escape', 'manual'] as const)(
+    'recovers from a stuck workspace picker through %s and ignores its late selection',
+    async (action) => {
+      installPublicFixture()
+      history.replaceState(null, '', '/#test-launcher-token')
+      const reply = deferred<Response>()
+      let signal: AbortSignal | null | undefined
+      vi.stubGlobal(
+        'fetch',
+        vi.fn<typeof fetch>(async (_input, init) => {
+          if (init?.method === 'GET') return new Response(JSON.stringify({ available: true }))
+          signal = init?.signal
+          return reply.promise
+        }),
+      )
+      const add = vi.fn(async (path: string) => ({
+        workspace: { path, name: '手动选择', lastUsedAt: null, sessionCount: 0, available: true },
+      }))
+      sdk.createClient.mockReturnValue({
+        apis: vi.fn(async () => ({ profile: { models: [{ route: 'local', id: 'model-a' }] } })),
+        approval: { decide: vi.fn(async () => undefined) },
+        close: vi.fn(async () => undefined),
+        config: {
+          get: vi.fn(async () => ({ configured: true })),
+          providers: vi.fn(async () => ({ providers: [] })),
+          save: vi.fn(async () => ({ configured: true })),
+          test: vi.fn(async () => ({ verified: true, models: [] })),
+        },
+        initialize: vi.fn(async () => undefined),
+        on: vi.fn(),
+        workspace: { list: vi.fn(async () => ({ items: [] })), add },
+        session: { list: vi.fn(async () => ({ items: [] })), load: vi.fn(), new: vi.fn() },
+      })
+      await import('../src/app.js')
+      const dialog = document.getElementById('new-session') as HTMLDialogElement
+      const picker = document.getElementById('workspace-pick') as HTMLButtonElement
+      const input = document.getElementById('new-session-cwd') as HTMLInputElement
+      const cancel = document.getElementById('new-session-cancel') as HTMLButtonElement
+      await vi.waitFor(() => expect(picker.disabled).toBe(false))
+      picker.click()
+      await vi.waitFor(() => expect(signal).toBeDefined())
+      expect(cancel.disabled).toBe(false)
+      expect(input.disabled).toBe(false)
+      if (action === 'cancel') cancel.click()
+      else if (action === 'escape') dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+      else {
+        const manual = document.getElementById('workspace-manual') as HTMLDetailsElement
+        manual.open = true
+        manual.dispatchEvent(new Event('toggle'))
+        expect(signal?.aborted).toBe(true)
+        input.value = '/workspace/manual'
+        input.dispatchEvent(new Event('input'))
+      }
+      await vi.waitFor(() => expect(signal?.aborted).toBe(true))
+      expect(picker.disabled).toBe(false)
+      reply.resolve(new Response(JSON.stringify({ status: 'selected', path: '/workspace/late' })))
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(add).not.toHaveBeenCalled()
+      if (action === 'manual') {
+        expect(input.value).toBe('/workspace/manual')
+        expect(dialog.open).toBe(true)
+        ;(document.getElementById('new-session-create') as HTMLButtonElement).click()
+        await vi.waitFor(() => expect(add).toHaveBeenCalledWith('/workspace/manual'))
+      } else expect(dialog.open).toBe(false)
+    },
+  )
+
   it('keeps the native picker available when workspace.add rejects the selected directory', async () => {
     installPublicFixture()
     history.replaceState(null, '', '/#test-launcher-token')

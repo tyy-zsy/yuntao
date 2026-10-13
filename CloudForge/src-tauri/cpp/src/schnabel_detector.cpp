@@ -167,7 +167,6 @@ std::vector<DetectedShape> SchnabelDetector::detect(const PointCloudT::Ptr& inpu
     cloud.calcNormals(0.01f * scale);
 
     RansacShapeDetector::Options options;
-    options.m_randomSeed = params.randomSeed;
     options.m_epsilon = epsilon;
     options.m_bitmapEpsilon = bitmapEpsilon;
     options.m_normalThresh = std::cos(params.maxNormalDevDeg * static_cast<float>(M_PI) / 180.0f);
@@ -352,7 +351,6 @@ std::vector<DetectedShape> SchnabelDetector::detectFromPoints(const float (*poin
     cloud.calcNormals(0.01f * scale);
 
     RansacShapeDetector::Options options;
-    options.m_randomSeed = params.randomSeed;
     options.m_epsilon = epsilon;
     options.m_bitmapEpsilon = bitmapEpsilon;
     options.m_normalThresh = std::cos(params.maxNormalDevDeg * static_cast<float>(M_PI) / 180.0f);

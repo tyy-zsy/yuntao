@@ -304,7 +304,7 @@ static int printUsage() {
     std::cerr
         << "Usage:\n"
         << "  cloudforge-cli info <cloud>\n"
-        << "  cloudforge-cli detect <cloud> [--preset outdoor|mechanical] [--min-inlier N] [--output DIR]\n"
+        << "  cloudforge-cli detect <cloud> [--preset outdoor|mechanical] [--min-inlier N] [--output DIR] [--preserve-points]\n"
         << "  cloudforge-cli refine <cloud> --indices FILE [--hint plane|sphere|cylinder|cone|torus|unknown] [--output DIR]\n"
         << "  cloudforge-cli synth <out.pcd> [--scene plane-cylinder]\n"
         << "  cloudforge-cli verify --truth FILE --result FILE [--tol R] [--angle-deg A]\n"
@@ -355,6 +355,7 @@ static int cmdDetect(int argc, char** argv) {
     std::string presetName = "mechanical_full";
     int minInlier = 0;
     std::string outDir;
+    bool preservePoints = false; // 面板索引需对应原始预览，保持已校验输入的点数和顺序。
     double noiseSigma = -1.0;   // <0 = 不加噪
     double downsample = 1.0;    // <1 = 随机保留比例（鲁棒性扫描用）
     for (int i = 0; i < argc; ++i) {
@@ -371,11 +372,17 @@ static int cmdDetect(int argc, char** argv) {
             noiseSigma = std::atof(argv[++i]);
         } else if (a == "--downsample" && i + 1 < argc) {
             downsample = std::atof(argv[++i]);
+        } else if (a == "--preserve-points") {
+            preservePoints = true;
         } else if (file.empty()) {
             file = a;
         }
     }
     if (file.empty()) return printUsage();
+    if (preservePoints && (noiseSigma > 0 || downsample < 1.0)) {
+        std::cout << "{\"ok\": false, \"error\": \"--preserve-points cannot be combined with noise or downsample\"}\n";
+        return 2;
+    }
 
     PointCloudT::Ptr cloud;
     std::string err;
@@ -383,7 +390,7 @@ static int cmdDetect(int argc, char** argv) {
         std::cout << "{\"ok\": false, \"error\": \"" << jesc(err) << "\"}\n";
         return 2;
     }
-    if (!formatCentersCloud(lowerExt(file)))
+    if (!preservePoints && !formatCentersCloud(lowerExt(file)))
         cloud = PointCloudGenerator::preprocess(cloud, true, 0.0f);
 
     // 鲁棒性扫描注：噪声注入与随机降采样在检测前施加（固定种子，同工况可复现）

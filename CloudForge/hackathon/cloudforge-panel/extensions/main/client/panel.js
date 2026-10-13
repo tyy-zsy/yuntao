@@ -7,10 +7,7 @@
 
 import { el, icon, num, pct } from './ui.js'
 import { prefs, WIDTH_STEP_PX } from './prefs.js'
-import { createCloudTab } from './tabs/cloud.js'
-import { createCadTab } from './tabs/cad.js'
-import { createVerifyTab } from './tabs/verify.js'
-import { createReportTab } from './tabs/report.js'
+import { createLazyTab } from './lazy-tab.js'
 import { createData } from './data.js'
 
 /** 三场景 profile（对齐 hackathon/VALUE.md 的"一个引擎、三种行业报告"） */
@@ -27,7 +24,7 @@ const TABS = [
   { id: 'report', label: '报告', iconName: 'doc' },
 ]
 
-export function mountPanel(host, ctx) {
+export function mountPanel(host, ctx, { applyStartedAt } = {}) {
   const data = createData(ctx)
 
   const state = {
@@ -42,9 +39,28 @@ export function mountPanel(host, ctx) {
     message: '',
     progress: null,
   }
+  let destroyed = false
+  let readingReport = false
+  let reportVersion = 0
+  let activeTabId = null
+  let reloadJob = null
+  let reloadRequested = false
+  let renderTimer = null
+  const dirtyTabs = new Set(TABS.map((t) => t.id))
+  const tabJobs = new Map()
+
+  // 点云下载/分片计算只更新可见内容；同一事件循环的进度更新合并一次。
+  state.notify = () => {
+    if (destroyed || renderTimer !== null) return
+    renderTimer = setTimeout(() => {
+      renderTimer = null
+      if (!destroyed) render()
+    }, 0)
+  }
 
   const root = el('div', { class: 'cf-panel' })
   root.id = 'cf-console'
+  if (Number.isFinite(applyStartedAt)) root.dataset.applyMs = applyStartedAt.toFixed(1)
   host.appendChild(root)
 
   // ---- 头部
@@ -102,15 +118,44 @@ export function mountPanel(host, ctx) {
   const footer = el('footer', { class: 'cf-foot' })
   root.appendChild(footer)
 
-  const tabs = {
-    cloud: createCloudTab({ ctx, data, state }),
-    cad: createCadTab({ ctx, data, state }),
-    verify: createVerifyTab({ ctx, data, state }),
-    report: createReportTab({ ctx, data, state }),
+  // 外壳不能静态依赖 viewer/three：否则浏览器先下载并求值整个三维模块图，
+  // 连标题与折叠按钮都要等它。相对路径字面量也让 AGH 资产快照收齐懒加载资源。
+  const loaders = {
+    cloud: () => import('./tabs/cloud.js').then((m) => m.createCloudTab),
+    cad: () => import('./tabs/cad.js').then((m) => m.createCadTab),
+    verify: () => import('./tabs/verify.js').then((m) => m.createVerifyTab),
+    report: () => import('./tabs/report.js').then((m) => m.createReportTab),
   }
+  const tabs = Object.fromEntries(TABS.map(({ id, label }) => [id, createLazyTab({
+    id, label,
+    load: async () => {
+      const createTab = await loaders[id]()
+      return () => createTab({ ctx, data, state })
+    },
+    onReady: () => state.notify(),
+    onError: (e) => { state.message = `${label}视图加载失败：${String(e?.message ?? e)}`; state.notify() },
+    onRetry: () => { dirtyTabs.add(id); void refreshTab(id) },
+  })]))
   for (const t of Object.values(tabs)) content.appendChild(t.el)
   // 点云页的兜底选择器要能触发整页重载
   tabs.cloud.setReload?.(() => reload())
+
+  // 检测或 CAD 生成完成后采用后端明确关联的工作流，其余页签读取这份新结果。
+  state.adoptWorkflow = ({ report, workflow, scene, sourceCloud }) => {
+    if (destroyed || !workflow?.dir) return
+    tabs.cloud.cancelRefresh?.()
+    reportVersion++
+    state.report = report
+    state.workflow = workflow
+    state.sceneCache = scene || null
+    state.cloudOverride = null
+    state.cloudPath = sourceCloud || workflow.sourceCloud || null
+    state.progress = null
+    state.phase = 'ready'
+    state.message = ''
+    for (const id of Object.keys(tabs)) dirtyTabs.add(id)
+    state.notify()
+  }
 
   // ---- 高度：交给 CSS
   // 面板是 position:fixed 的浮层卡片，高度用 calc(100dvh - var(--cf-float-top) - var(--cf-float-gap))
@@ -147,6 +192,7 @@ export function mountPanel(host, ctx) {
       /* 忽略 */
     }
     render()
+    void refreshTab(id)
   }
 
   // 折叠状态与列宽档位放在共享 store（见 prefs.js）：宿主会话头栏那颗按钮在另一棵
@@ -203,14 +249,41 @@ export function mountPanel(host, ctx) {
   // 否则 querySelector 返回 null 会让整个 mountPanel 抛错、面板彻底挂不上
   header.querySelector('[data-cf="rail"]')?.addEventListener('click', () => setRail(!state.rail))
 
-  async function reload() {
+  function reload() {
+    if (destroyed) return Promise.resolve()
+    reloadRequested = true
+    if (reloadJob) {
+      tabs.cloud.cancelRefresh?.()
+      return reloadJob
+    }
+    reloadJob = (async () => {
+      do {
+        reloadRequested = false
+        await reloadOnce()
+      } while (reloadRequested && !destroyed)
+    })().finally(() => { reloadJob = null })
+    return reloadJob
+  }
+
+  async function reloadOnce() {
+    readingReport = true
+    tabs.cloud.cancelRefresh?.()
     state.phase = 'loading'
     state.message = '正在读取工作区产物…'
     render()
     try {
       const report = await data.report()
+      if (destroyed) return
+      const previousWorkflow = state.workflow
       state.report = report
-      state.workflow = pickWorkflow(report.workflows, state.workflow?.dir)
+      state.workflow = pickWorkflow(report.workflows, previousWorkflow?.dir)
+      if (previousWorkflow?.dir !== state.workflow?.dir) {
+        state.cloudPath = null
+        state.cloudOverride = null
+        state.meshCache = null
+        state.progress = null
+      }
+      state.sceneCache = null
       if (!state.report.workflows.length) {
         state.message = '工作区还没有检测结果——在会话里跑一次分析'
         state.phase = 'empty'
@@ -219,13 +292,51 @@ export function mountPanel(host, ctx) {
         state.message = ''
       }
     } catch (e) {
+      if (destroyed) return
       state.message = `读取失败：${String(e.message || e)}`
       state.phase = 'empty'
+    } finally {
+      readingReport = false
     }
+    if (destroyed) return
+    reportVersion++
+    for (const id of Object.keys(tabs)) dirtyTabs.add(id)
     render()
-    await Promise.all(Object.values(tabs).map((t) => t.refresh?.()))
-    // 数据到位后再整体渲染一次：页签的标题/列表/进度都依赖 refresh 的结果
-    render()
+    // 首屏只读取当前可见页；折叠时保留视口，展开或切页再补最新数据。
+    if (!state.rail && !reloadRequested) await refreshTab(state.tab)
+    if (!destroyed) render()
+  }
+
+  function refreshTab(id) {
+    if (destroyed || readingReport || state.rail || !state.report || !dirtyTabs.has(id)) return Promise.resolve()
+    if (tabJobs.has(id)) return tabJobs.get(id)
+    dirtyTabs.delete(id)
+    const version = reportVersion
+    const job = (async () => {
+      // 报告的场景换算及 CAD 叠加仍需要场景元信息；无需下载隐藏的整份点云。
+      if (id !== 'cloud' && !state.sceneCache && state.workflow?.dir) {
+        const scene = await data.scene(state.workflow.dir)
+        if (destroyed || version !== reportVersion) return
+        if (scene?.ok !== false) state.sceneCache = scene
+      }
+      await tabs[id].refresh?.()
+      if (destroyed || version !== reportVersion) return
+      if (!state.rail && state.tab === id) {
+        // 元信息更新后，非点云页的 activate 负责生成当前卡片。
+        if (id !== 'cloud') tabs[id].activate?.()
+        render()
+      }
+    })().catch((e) => {
+      if (!destroyed && version === reportVersion) {
+        state.message = `页签读取失败：${String(e?.message ?? e)}`
+        render()
+      }
+    }).finally(() => {
+      tabJobs.delete(id)
+      if (!destroyed && !state.rail && state.tab === id && dirtyTabs.has(id)) void refreshTab(id)
+    })
+    tabJobs.set(id, job)
+    return job
   }
 
   // 挂载时绑定到本会话的偏好，并订阅宿主头栏那颗按钮的改动
@@ -242,7 +353,10 @@ export function mountPanel(host, ctx) {
       root.dataset.w = String(next.w)
       dirty = true
     }
-    if (dirty) render()
+    if (dirty) {
+      render()
+      if (!state.rail) void refreshTab(state.tab)
+    }
   })
 
   // ---- 渲染
@@ -252,8 +366,12 @@ export function mountPanel(host, ctx) {
     for (const [id, t] of Object.entries(tabs)) {
       const on = state.tab === id
       t.el.classList.toggle('active', on)
-      if (on) t.activate?.()
-      else t.deactivate?.()
+    }
+    const visibleTab = state.rail ? null : state.tab
+    if (visibleTab !== activeTabId) {
+      if (activeTabId) tabs[activeTabId].deactivate?.()
+      activeTabId = visibleTab
+      if (activeTabId) tabs[activeTabId].activate?.()
     }
     statusDot.dataset.phase = state.phase
     statusText.textContent = statusLine()
@@ -268,7 +386,7 @@ export function mountPanel(host, ctx) {
     const active = tabs[state.tab]
     active.renderFooter?.(footer, { data, state, reload, setMessage: (m) => { state.message = m; render() } })
 
-    for (const t of Object.values(tabs)) t.render?.()
+    if (!state.rail) active.render?.()
   }
 
   function statusLine() {
@@ -276,12 +394,20 @@ export function mountPanel(host, ctx) {
     if (state.phase === 'busy') return '执行中…'
     if (state.phase === 'empty') return state.message ? '待命' : '待命'
     const w = state.workflow
+    const selected = state.cloudOverride || state.cloudPath
+    const pathKey = (value) => String(value || '').replace(/\\/g, '/').toLowerCase()
+    if (selected && (!w?.sourceCloud || pathKey(selected) !== pathKey(w.sourceCloud))) {
+      const points = state.progress?.total
+      return `${points != null ? `${num(points)} 点 · ` : ''}待检测`
+    }
     if (!w) return '已连接 · 无结果'
     const cov = w.coverage ? ` · 覆盖 ${pct(w.coverage)}` : ''
     const el2 = w.elapsedMs != null ? ` · ${w.elapsedMs} ms` : ''
     return `${num(w.points)} 点 · ${w.shapes} 基元${cov}${el2}`
   }
 
+  // 只留 DOM 时间戳供性能检查，不把实现细节放进产品界面。
+  root.dataset.mountedMs = performance.now().toFixed(1)
   void reload()
   const offTurn = data.onTurnEnd(() => void reload())
 
@@ -300,6 +426,8 @@ export function mountPanel(host, ctx) {
   return {
     root,
     destroy() {
+      destroyed = true
+      clearTimeout(renderTimer)
       offTurn?.()
       offPrefs()
       for (const t of Object.values(tabs)) t.destroy?.()

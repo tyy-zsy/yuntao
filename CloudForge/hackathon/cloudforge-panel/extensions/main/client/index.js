@@ -39,24 +39,28 @@ const SLOT_HEADER_CORNER = 'conversation.session.header.corner'
 
 let instance = null
 let hostNode = null
+let applyStartedAt = null
+
+// React 在 ref 身份变化时先调用旧 ref(null)，会销毁并重新加载整个三维面板。
+// 用稳定的回调保留 viewer 和数据，宿主的会话状态更新无需重新初始化。
+function attachPanel(node) {
+  if (node === hostNode) return
+  if (instance) {
+    try {
+      instance.destroy()
+    } catch {
+      /* 卸载期异常不影响宿主 */
+    }
+    instance = null
+  }
+  hostNode = node
+  if (node) instance = mountPanel(node, currentCtx, { applyStartedAt })
+}
 
 function CloudForgePanel() {
   return createElement('div', {
     className: 'cf-host',
-    ref: (node) => {
-      // 回调 ref 每次渲染都会触发，用 node 身份去重；null 表示卸载
-      if (node === hostNode) return
-      if (instance) {
-        try {
-          instance.destroy()
-        } catch {
-          /* 卸载期异常不影响宿主 */
-        }
-        instance = null
-      }
-      hostNode = node
-      if (node) instance = mountPanel(node, currentCtx)
-    },
+    ref: attachPanel,
   })
 }
 
@@ -110,6 +114,7 @@ function chevron(on) {
 }
 
 export function apply(ctx, config) {
+  applyStartedAt = globalThis.performance?.now?.() ?? null
   currentCtx = ctx
   void config
 
@@ -119,6 +124,9 @@ export function apply(ctx, config) {
   // 命令 id 必须匹配 /^[a-z][a-z0-9.-]{0,127}$/（web-client/src/services.ts:144）。
   const commands = [
     { id: 'cloudforge.detect', title: '重跑检测', service: 'cloudforge.run' },
+    { id: 'cloudforge.detect.start', title: '开始检测当前点云', service: 'cloudforge.detect' },
+    { id: 'cloudforge.verify.agh', title: '交给 AGH 验证当前模型', service: 'cloudforge.verifyrequest' },
+    { id: 'cloudforge.cad', title: '从当前点云生成 CAD', service: 'cloudforge.cad' },
     { id: 'cloudforge.preview', title: '在 FreeCAD / GUI 中打开', service: 'cloudforge.preview' },
     { id: 'cloudforge.export', title: '导出 AGH 执行记录', service: 'cloudforge.export' },
   ]
@@ -139,7 +147,7 @@ export function apply(ctx, config) {
     dispose = ctx.slots.register({ name: SLOT, id: 'cloudforge-panel', priority: 2 }, CloudForgePanel)
   } catch (e) {
     window.__CF_PANEL = { ctx, error: String((e && e.message) || e) }
-    return
+    throw e
   }
 
 // 折叠开关另注册到会话头栏的 corner 槽（宿主渲染，样式复用宿主的 .icon-button）。

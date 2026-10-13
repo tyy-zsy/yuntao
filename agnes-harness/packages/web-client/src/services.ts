@@ -206,7 +206,12 @@ export class SessionService extends Service {
   private currentHandle: SessionClientHandle | undefined
   private currentHandleListener: ((...args: never[]) => void) | undefined
 
-  constructor(ctx: Context, initial?: string, client?: HostAgnesClient) {
+  constructor(
+    ctx: Context,
+    initial?: string,
+    client?: HostAgnesClient,
+    private readonly ensureActiveSession?: () => Promise<string>,
+  ) {
     super(ctx, 'session')
     this.currentSessionId = initial
     this.client = client
@@ -215,6 +220,17 @@ export class SessionService extends Service {
 
   get sessionId(): string | undefined {
     return this.currentSessionId
+  }
+
+  /** Explicit user actions may ask the host to prepare a session without starting a model turn. */
+  async ensureActive(): Promise<string> {
+    if (!this.ensureActiveSession) {
+      if (this.currentSessionId) return this.currentSessionId
+      throw new Error('当前宿主不支持准备新会话，请先创建或选择一个会话。')
+    }
+    const id = await this.ensureActiveSession()
+    if (!id || this.currentSessionId !== id) throw new Error('会话已切换，请重新选择文件。')
+    return id
   }
 
   /** 仅宿主调用。 */

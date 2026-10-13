@@ -1,6 +1,6 @@
 {
   "client": {
-    "entry": "./client/index.js",
+    "entry": "./client/bundle/index.js",
     "styles": ["./client/index.css"],
     "slots": ["workbench.panel", "conversation.session.header.corner"],
     "slotCatalogVersion": "dsh-client-slots/v1",
@@ -9,6 +9,8 @@
     },
     "services": [
       "cloudforge.report",
+      "cloudforge.pickcloud",
+      "cloudforge.pickstatus",
       "cloudforge.cloud",
       "cloudforge.cloudmeta",
       "cloudforge.scene",
@@ -19,7 +21,13 @@
       "cloudforge.run",
       "cloudforge.preview",
       "cloudforge.export",
-      "cloudforge.exportstatus"
+      "cloudforge.exportstatus",
+      "cloudforge.cad",
+      "cloudforge.cadstatus",
+      "cloudforge.detect",
+      "cloudforge.detectstatus",
+      "cloudforge.verifyrequest",
+      "cloudforge.verifystatus"
     ],
     "projections": []
   }

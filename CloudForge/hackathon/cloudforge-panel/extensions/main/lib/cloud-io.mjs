@@ -22,6 +22,13 @@ const PLY_SCALARS = {
   double: 8, float64: 8,
 }
 
+const PLY_READERS = {
+  char: 'readInt8', int8: 'readInt8', uchar: 'readUInt8', uint8: 'readUInt8',
+  short: 'readInt16LE', int16: 'readInt16LE', ushort: 'readUInt16LE', uint16: 'readUInt16LE',
+  int: 'readInt32LE', int32: 'readInt32LE', uint: 'readUInt32LE', uint32: 'readUInt32LE',
+  float: 'readFloatLE', float32: 'readFloatLE', double: 'readDoubleLE', float64: 'readDoubleLE',
+}
+
 const PCD_SCALARS = { I: 1, U: 1, F: 4 }
 
 class CloudFormatError extends Error {
@@ -66,24 +73,25 @@ function parsePly(file, stat) {
       } else if (tok[0] === 'element') {
         inVertex = tok[1] === 'vertex'
         if (inVertex) vertexCount = Number.parseInt(tok[2], 10)
-        else if (tok[1] === 'face') cursor = Number.MAX_SAFE_INTEGER // 面数据在顶点之后，顶点读完即可停
+        else if (!vertexProps.length && Number(tok[2]) > 0)
+          throw new CloudFormatError('PLY 顶点前含其他元素数据，暂不支持此布局')
       } else if (tok[0] === 'property' && inVertex) {
         if (tok[1] === 'list') {
-          vertexProps.push(null) // 顶点上出现 list 属性极不常见；标记后按标量处理会失配，直接拒绝
-          cursor = Number.MAX_SAFE_INTEGER
+          throw new CloudFormatError('PLY 顶点包含 list 属性，暂不支持此布局')
         } else {
           const size = PLY_SCALARS[tok[1]]
           if (!size) throw new CloudFormatError(`PLY 不支持的属性类型：${tok[1]}`)
-          if (!scalarIndex.has(tok[2])) scalarIndex.set(tok[2], cursor)
+          if (!scalarIndex.has(tok[2])) scalarIndex.set(tok[2], { offset: cursor, index: vertexProps.length, type: tok[1] })
           vertexProps.push(size)
           cursor += size
         }
       }
     }
     if (!format) throw new CloudFormatError('PLY 头部缺少 format')
-    if (!vertexCount || !scalarIndex.has('x') || !scalarIndex.has('y') || !scalarIndex.has('z'))
+    if (!Number.isSafeInteger(vertexCount) || vertexCount <= 0 || !scalarIndex.has('x') || !scalarIndex.has('y') || !scalarIndex.has('z'))
       throw new CloudFormatError('PLY 缺少 vertex element 或 x/y/z 属性')
 
+    const xyz = ['x', 'y', 'z'].map((name) => scalarIndex.get(name))
     const positions = new Float32Array(vertexCount * 3)
     if (format.startsWith('ascii')) {
       const text = readFileSync(file, 'latin1')
@@ -96,9 +104,8 @@ function parsePly(file, stat) {
         let e = p
         while (e < body.length && body[e] !== '\n' && body[e] !== '\r') e++
         const fields = body.slice(p, e).trim().split(/\s+/)
-        positions[vi * 3] = Number.parseFloat(fields[0])
-        positions[vi * 3 + 1] = Number.parseFloat(fields[1])
-        positions[vi * 3 + 2] = Number.parseFloat(fields[2])
+        if (fields.length < vertexProps.length) throw new CloudFormatError(`PLY ascii 第 ${vi + 1} 个顶点属性不足`)
+        for (let axis = 0; axis < 3; axis++) positions[vi * 3 + axis] = Number(fields[xyz[axis].index])
         vi++
         p = e + 1
       }
@@ -115,14 +122,12 @@ function parsePly(file, stat) {
       throw new CloudFormatError(`PLY 文件截断：需要 ${need} 字节，实际 ${stat.size}`)
     const raw = readFileSync(file)
     const base = raw.subarray(dataOffset)
-    const ox = scalarIndex.get('x')
-    const oy = scalarIndex.get('y')
-    const oz = scalarIndex.get('z')
     for (let i = 0; i < vertexCount; i++) {
       const off = i * stride
-      positions[i * 3] = base.readFloatLE(off + ox)
-      positions[i * 3 + 1] = base.readFloatLE(off + oy)
-      positions[i * 3 + 2] = base.readFloatLE(off + oz)
+      for (let axis = 0; axis < 3; axis++) {
+        const prop = xyz[axis]
+        positions[i * 3 + axis] = base[PLY_READERS[prop.type]](off + prop.offset)
+      }
     }
     return { kind: 'points', positions, count: vertexCount, format: 'ply-binary-le' }
   } finally {
@@ -141,23 +146,31 @@ function parsePcd(file, stat) {
   const fields = /^FIELDS\s+(.+)$/m.exec(header)?.[1]?.trim().split(/\s+/)
   const sizes = /^SIZE\s+(.+)$/m.exec(header)?.[1]?.trim().split(/\s+/).map(Number)
   const types = /^TYPE\s+(.+)$/m.exec(header)?.[1]?.trim().split(/\s+/)
-  const counts = (/^COUNT\s+(.+)$/m.exec(header)?.[1]?.trim().split(/\s+/).map(Number)) ?? fields.map(() => 1)
+  const counts = (/^COUNT\s+(.+)$/m.exec(header)?.[1]?.trim().split(/\s+/).map(Number)) ?? fields?.map(() => 1)
   const points = Number.parseInt(/^POINTS\s+(\d+)$/m.exec(header)?.[1] ?? '', 10)
   if (!fields || !sizes || !types || !points) throw new CloudFormatError('PCD 头部不完整（FIELDS/SIZE/TYPE/POINTS）')
-  if (fields.length !== sizes.length || fields.length !== types.length)
-    throw new CloudFormatError('PCD FIELDS/SIZE/TYPE 数量不一致')
+  if (fields.length !== sizes.length || fields.length !== types.length || fields.length !== counts.length)
+    throw new CloudFormatError('PCD FIELDS/SIZE/TYPE/COUNT 数量不一致')
+  if (!Number.isSafeInteger(points) || points <= 0 || counts.some((n) => !Number.isSafeInteger(n) || n <= 0)
+    || sizes.some((n) => !Number.isSafeInteger(n) || n <= 0))
+    throw new CloudFormatError('PCD POINTS/SIZE/COUNT 必须是有效正整数')
 
   const stride = sizes.reduce((a, s, i) => a + s * (counts[i] ?? 1), 0)
   const offsets = []
+  const columns = []
   let acc = 0
+  let column = 0
   for (let i = 0; i < fields.length; i++) {
     offsets.push(acc)
+    columns.push(column)
     acc += sizes[i] * (counts[i] ?? 1)
+    column += counts[i]
   }
   const xi = fields.indexOf('x')
   const yi = fields.indexOf('y')
   const zi = fields.indexOf('z')
   if (xi < 0 || yi < 0 || zi < 0) throw new CloudFormatError('PCD 缺少 x/y/z 字段')
+  if ([xi, yi, zi].some((i) => counts[i] !== 1)) throw new CloudFormatError('PCD x/y/z 必须是标量字段')
 
   const positions = new Float32Array(points * 3)
   const readOne = (dataBuf, base, off, fieldIdx) => {
@@ -196,9 +209,10 @@ function parsePcd(file, stat) {
     if (rows.length < points) throw new CloudFormatError(`PCD ascii 顶点不足：${rows.length}/${points}`)
     for (let i = 0; i < points; i++) {
       const f = rows[i].trim().split(/\s+/)
-      positions[i * 3] = Number.parseFloat(f[xi])
-      positions[i * 3 + 1] = Number.parseFloat(f[yi])
-      positions[i * 3 + 2] = Number.parseFloat(f[zi])
+      if (f.length < column) throw new CloudFormatError(`PCD ascii 第 ${i + 1} 个点字段不足`)
+      positions[i * 3] = Number(f[columns[xi]])
+      positions[i * 3 + 1] = Number(f[columns[yi]])
+      positions[i * 3 + 2] = Number(f[columns[zi]])
     }
     return { kind: 'points', positions, count: points, format: 'pcd-ascii' }
   }

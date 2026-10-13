@@ -1,6 +1,6 @@
 /**
  * 点云渲染器 —— 逐条复刻 Qt PointCloudViewerWidget 契约（见 spec/viewer.md）：
- * - 一切皆 GL_POINTS，自定义 shader（固定像素点大小、圆点软边、gamma 0.88 提亮）
+ * - 点云用 GL_POINTS；CAD 用完整三角网格与光照，不转换成顶点采样
  * - trackball 相机（arcball 四元数左乘、中/右键平移、滚轮 0.9/1.1 缩放）
  * - 取景：center = 质心（均值），distance = span×1.5
  * - 调色板 objectColor(i%7)；选中形状 depthTest=false 最后绘制
@@ -47,6 +47,14 @@ interface Cloud {
   points: THREE.Points;
   material: THREE.ShaderMaterial;
 }
+
+interface CadMesh {
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+  edges: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial> | null;
+}
+
+// EdgesGeometry 需要按坐标建立邻接表，只对适量网格生成轮廓。
+const MAX_CAD_EDGE_FACES = 75000;
 
 /** 原始 sRGB 分量（0-1），不做色彩空间转换 —— shader 逐行复刻 Qt GLSL，直接输出 */
 function raw(hex: number): THREE.Color {
@@ -111,6 +119,8 @@ export class CloudViewer {
   private visible: boolean[] = [];
   private baseData: Float32Array | null = null;
   private baseSceneId = 0;
+  private cad: CadMesh | null = null;
+  private cadWireframe = false;
 
   private center = new THREE.Vector3();
   private span = 1;
@@ -137,6 +147,13 @@ export class CloudViewer {
 
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
     this.scene.background = new THREE.Color(COLORS.bg);
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x64727f, 1.2);
+    ambient.position.set(0, 0, 1);
+    const key = new THREE.DirectionalLight(0xffffff, 2.2);
+    key.position.set(-3, -4, 7);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+    fill.position.set(4, 1, 3);
+    this.scene.add(ambient, key, fill);
 
     const dom = this.renderer.domElement;
     dom.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -147,6 +164,7 @@ export class CloudViewer {
 
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(container);
+    this.resize();
 
     const loop = () => {
       if (this.disposed) return;
@@ -177,6 +195,8 @@ export class CloudViewer {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.ro.disconnect();
+    window.removeEventListener("pointermove", this.onMove);
+    window.removeEventListener("pointerup", this.onUp);
     this.clear();
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -211,11 +231,38 @@ export class CloudViewer {
   }
 
   fitToCloud() {
-    if (this.baseData && this.baseData.length) {
+    if (this.cad) {
+      this.setZUpView();
+      this.frameCad(this.cad.mesh.geometry.boundingBox!);
+    } else if (this.baseData && this.baseData.length) {
       this.frame(this.baseData);
     } else {
       this.distance = this.span * 1.5;
     }
+  }
+
+  /** 完整包围盒按当前画布比例取景；仅打开新 CAD 或手动全景时执行。 */
+  private frameCad(bounds: THREE.Box3) {
+    bounds.getCenter(this.center);
+    const size = bounds.getSize(new THREE.Vector3());
+    this.span = Math.max(size.x, size.y, size.z, 1e-4);
+    const tanV = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const tanH = tanV * this.camera.aspect;
+    const inverse = this.q.clone().invert();
+    const corner = new THREE.Vector3();
+    let distance = 0;
+    for (let i = 0; i < 8; i++) {
+      corner.set(
+        i & 1 ? bounds.max.x : bounds.min.x,
+        i & 2 ? bounds.max.y : bounds.min.y,
+        i & 4 ? bounds.max.z : bounds.min.z,
+      ).sub(this.center).applyQuaternion(inverse);
+      distance = Math.max(distance, corner.z + Math.abs(corner.x) / tanH, corner.z + Math.abs(corner.y) / tanV);
+    }
+    this.distance = Math.max(distance + this.span * 0.12, this.span * 0.25);
+    this.camera.near = this.span * 0.001;
+    this.camera.far = Math.max(this.span * 40, this.distance + this.span * 5);
+    this.camera.updateProjectionMatrix();
   }
 
   /** Z-up 等距视角：Z 轴对准 (-4,-6,4) 方向（QQuaternion::fromDirection 语义） */
@@ -241,12 +288,73 @@ export class CloudViewer {
     this.scene.add(this.base.points);
   }
 
+  /** f32 XYZ 非索引三角形；保持全部面及文件坐标、单位。构建失败不清旧场景。 */
+  setCadMesh(data: Float32Array, sceneId: number) {
+    if (!data.length || data.length % 9 !== 0 || data.length > 9000000) {
+      throw new Error("CAD 网格为空、三角形数据不完整或超过 100 万个面");
+    }
+    for (const value of data) {
+      if (!Number.isFinite(value)) throw new Error("CAD 网格包含无效坐标");
+    }
+    const geometry = new THREE.BufferGeometry();
+    let material: THREE.MeshStandardMaterial | null = null;
+    let edges: CadMesh["edges"] = null;
+    try {
+      geometry.setAttribute("position", new THREE.BufferAttribute(data, 3));
+      geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      material = new THREE.MeshStandardMaterial({
+        color: 0x429866,
+        roughness: 0.72,
+        metalness: 0.05,
+        side: THREE.DoubleSide,
+        flatShading: true,
+        wireframe: this.cadWireframe,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      });
+      if (data.length / 9 <= MAX_CAD_EDGE_FACES) {
+        const edgeGeometry = new THREE.EdgesGeometry(geometry, 25);
+        const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x2b6345, transparent: true, opacity: 0.6 });
+        edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+        edges.visible = !this.cadWireframe;
+      }
+      const mesh = new THREE.Mesh(geometry, material);
+      const newScene = !this.cad || sceneId !== this.baseSceneId;
+      this.clear();
+      this.cad = { mesh, edges };
+      this.baseSceneId = sceneId;
+      this.scene.add(mesh);
+      if (edges) this.scene.add(edges);
+      if (newScene) {
+        this.setZUpView();
+        this.frameCad(geometry.boundingBox!);
+      }
+    } catch (error) {
+      geometry.dispose();
+      material?.dispose();
+      edges?.geometry.dispose();
+      edges?.material.dispose();
+      throw error;
+    }
+  }
+
+  setCadWireframe(enabled: boolean) {
+    this.cadWireframe = enabled;
+    if (!this.cad) return;
+    this.cad.mesh.material.wireframe = enabled;
+    if (this.cad.edges) this.cad.edges.visible = !enabled;
+  }
+
   /**
    * 检测/AI 视图：底云淡显 + 形状内点按调色板着色。
    * sceneId 仅决定"是否重建底云并重新取景"（新场景）；
    * 形状集与 remaining 每次调用都全量重建（对齐 Qt showDetectionResults）。
    */
   showDetectionResults(shapeClouds: Float32Array[], remaining: Float32Array | null, baseCloud: Float32Array, sceneId: number) {
+    this.killCad();
     const newScene = sceneId !== this.baseSceneId;
     // 原始视图 base 一律弃用（回到原始视图走 setPointCloud 重建）
     this.killBase();
@@ -304,6 +412,19 @@ export class CloudViewer {
     c.material.dispose();
   }
 
+  private killCad() {
+    if (!this.cad) return;
+    this.scene.remove(this.cad.mesh);
+    this.cad.mesh.geometry.dispose();
+    this.cad.mesh.material.dispose();
+    if (this.cad.edges) {
+      this.scene.remove(this.cad.edges);
+      this.cad.edges.geometry.dispose();
+      this.cad.edges.material.dispose();
+    }
+    this.cad = null;
+  }
+
   setShapeVisible(i: number, v: boolean) {
     if (i < 0 || i >= this.shapes.length) return;
     this.visible[i] = v;
@@ -356,6 +477,7 @@ export class CloudViewer {
   }
 
   clear() {
+    this.killCad();
     this.killBase();
     for (const s of this.shapes) this.killCloud(s);
     if (this.remaining) this.killCloud(this.remaining);

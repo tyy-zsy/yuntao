@@ -199,6 +199,7 @@ const computerUseStatus = createComputerUsePaneController(client)
 addEventListener('pagehide', () => computerUseStatus.dispose(), { once: true })
 const clientModules = await startClientModules({
   agnes: client,
+  ensureActiveSession: async () => (await prepareSession()).id,
   claim: claimSlotCard,
   clientServiceCaller: async (module, sessionId, service, input) => {
     const response = await fetch('/api/client-modules/service', {
@@ -369,6 +370,7 @@ let sessionPending = false
 let newSessionCreating = false
 let workspacePickerReady: boolean | undefined
 let workspacePickerBusy = false
+let workspacePickerController: AbortController | undefined
 let stopAfterSeq = 0
 let approvalBusy = false
 let runtimeModels: ModelPickerOption[] = []
@@ -415,6 +417,7 @@ let sessionNext: string | undefined
 let selectedWorkspace: WorkspaceEntry | undefined
 let draftingNew = false
 let pendingSessionKey: string | undefined
+let sessionPreparation: Promise<Session> | undefined
 let liveApproval:
   | { request: PermissionRequest; afterSeq: number; finish(value: PermissionOutcome): void }
   | undefined
@@ -1219,17 +1222,17 @@ function renderNewSessionControls(): void {
   workspacePick.hidden = workspacePickerReady === false
   setButtonLabel(workspacePick, workspacePickerBusy ? '正在打开…' : '选择文件夹…')
   workspacePickerState.textContent = workspacePickerBusy
-    ? '请在系统窗口中选择工作区。'
+    ? '请在系统窗口中选择工作区；也可取消或手动输入路径。'
     : workspacePickerReady === undefined
       ? '正在检查系统目录选择器…'
       : workspacePickerReady
         ? '从这台机器选择一个目录。'
         : '当前环境无法打开目录选择器，请手动输入路径。'
   if (workspacePickerReady === false) workspaceManual.open = true
-  newSessionCwd.disabled = workspacePickerBusy
-  newSessionCancel.disabled = newSessionCreating || workspacePickerBusy
+  newSessionCwd.disabled = newSessionCreating
+  newSessionCancel.disabled = newSessionCreating
   for (const control of newSessionDialog.querySelectorAll<HTMLButtonElement>('[data-new-session-cancel]'))
-    control.disabled = newSessionCreating || workspacePickerBusy
+    control.disabled = newSessionCreating
 }
 function openNewSessionDialog(): void {
   if (!connected || sessionPending || newSessionCreating) return
@@ -1244,6 +1247,7 @@ function openNewSessionDialog(): void {
   else newSessionCwd.focus()
 }
 function closeNewSessionDialog(): void {
+  cancelWorkspacePicker()
   if (!newSessionDialog.open) return
   try {
     newSessionDialog.close()
@@ -1282,14 +1286,24 @@ async function registerWorkspace(cwd: string): Promise<void> {
   }
 }
 async function chooseWorkspace(): Promise<void> {
+  cancelWorkspacePicker()
   await registerWorkspace(newSessionCwd.value.trim())
+}
+function cancelWorkspacePicker(): void {
+  workspacePickerController?.abort()
+  workspacePickerController = undefined
+  workspacePickerBusy = false
+  renderNewSessionControls()
 }
 async function pickWorkspace(): Promise<void> {
   if (!workspacePickerReady || workspacePickerBusy || newSessionCreating) return
   workspacePickerBusy = true
+  const controller = new AbortController()
+  workspacePickerController = controller
   renderNewSessionControls()
   try {
-    const result = await requestWorkspacePicker().catch(() => undefined)
+    const result = await requestWorkspacePicker(fetch, controller.signal).catch(() => undefined)
+    if (controller.signal.aborted || workspacePickerController !== controller) return
     if (!result) {
       workspacePickerReady = false
       workspaceManual.open = true
@@ -1300,13 +1314,17 @@ async function pickWorkspace(): Promise<void> {
     if (result.status === 'unavailable') {
       workspacePickerReady = false
       workspaceManual.open = true
+      element('new-session-error', 'p').textContent = '目录选择器未能完成，请手动输入工作区路径。'
       return
     }
     newSessionCwd.value = result.path
     await registerWorkspace(result.path)
   } finally {
-    workspacePickerBusy = false
-    renderNewSessionControls()
+    if (workspacePickerController === controller) {
+      workspacePickerController = undefined
+      workspacePickerBusy = false
+      renderNewSessionControls()
+    }
   }
 }
 async function beginNewDraft(showWorkspacePicker = true): Promise<void> {
@@ -1552,13 +1570,17 @@ newSessionForm.addEventListener('submit', (event) => {
   event.preventDefault()
   run(chooseWorkspace)
 })
-newSessionCwd.addEventListener('input', renderNewSessionControls)
+newSessionCwd.addEventListener('focus', cancelWorkspacePicker)
+newSessionCwd.addEventListener('input', cancelWorkspacePicker)
+workspaceManual.addEventListener('toggle', () => {
+  if (workspaceManual.open) cancelWorkspacePicker()
+})
 workspacePick.addEventListener('click', () => run(pickWorkspace))
 bindDismissibleDialog({
   dialog: newSessionDialog,
   cancel: newSessionCancel,
   additional: newSessionDialog.querySelectorAll('[data-new-session-cancel]'),
-  canClose: () => !newSessionCreating && !workspacePickerBusy,
+  canClose: () => !newSessionCreating,
   close: closeNewSessionDialog,
   restoreFocus: () => clientModules.sidebar?.focusNew(),
 })
@@ -1800,6 +1822,93 @@ function handleComposerDraftChange(value: string): void {
   composerRuntime.resize()
   renderControls()
 }
+/** Prepare the selected workspace through the same SDK admission path as the first message.
+ * This deliberately creates no prompt, and is called only by explicit user actions. */
+function prepareSession(): Promise<Session> {
+  if (sessionPreparation) return sessionPreparation
+  if (!connected || sessionPending || stopping || permissionChangePending || modelChangePending || permissionRefreshPending)
+    return Promise.reject(new Error('会话正在准备或连接已变化，请稍后重试。'))
+  if (!current && (!draftingNew || !selectedWorkspace?.available)) {
+    openNewSessionDialog()
+    return Promise.reject(new Error('请先选择可用工作区，再选择文件。'))
+  }
+  const connectionEpoch = permissionConnectionEpoch
+  let ownedSelection = selection
+  const workspace = selectedWorkspace
+  const draftModel = knownSessionModel
+  sessionPending = true
+  renderControls()
+  const work = (async () => {
+    let session = current
+    if (!session) {
+      const key = pendingSessionKey ?? crypto.randomUUID()
+      pendingSessionKey = key
+      const created = await client.session.new({ cwd: workspace?.path ?? '', sessionKey: key })
+      if (
+        selection !== ownedSelection || !draftingNew ||
+        selectedWorkspace?.path !== workspace?.path ||
+        !connected || connectionEpoch !== permissionConnectionEpoch
+      ) {
+        await created.detach().catch(() => undefined)
+        throw new Error('工作区、会话或连接已变化，请重新选择文件。')
+      }
+      // open() advances selection synchronously. Never adopt a later selection after its await.
+      ownedSelection++
+      await open(created.id, {
+        created,
+        preserveSending: true,
+        ...(workspace ? { workspace } : {}),
+        ...(draftModel ? { initialModel: draftModel } : {}),
+      })
+      if (current !== created || selection !== ownedSelection) throw new Error('会话选择已改变。')
+      session = created
+      sessionPending = true
+      renderControls()
+    }
+    const assertCurrent = () => {
+      if (current !== session || selection !== ownedSelection) throw new Error('会话选择已改变。')
+      if (!connected || connectionEpoch !== permissionConnectionEpoch || permissionRefreshPending)
+        throw new Error('连接已变化，请等待权限同步后重试。')
+    }
+    assertCurrent()
+    if (initialModelPending) {
+      const selectedModel = initialModelPending
+      const applied = await session.setModel({
+        slot: 'primary', route: selectedModel.route, model: selectedModel.id,
+        thinking: selectedModel.settings?.thinking ?? null,
+        contextWindow: selectedModel.settings?.contextWindow ?? null,
+      })
+      assertCurrent()
+      modelSelectionSeq = applied.effectiveFromSeq
+      knownSessionModel = selectedModel
+      initialModelPending = undefined
+    }
+    if (initialPermissionPending !== undefined) {
+      const selectedPermission = initialPermissionPending
+      const enabled = yoloEnabled(selectedPermission)
+      const applied = await session.setYolo(enabled)
+      assertCurrent()
+      permissionSelectionSeq = applied.effectiveFromSeq
+      sessionYoloEnabled = enabled
+      permissionMode = selectedPermission
+      initialPermissionPending = undefined
+    }
+    assertCurrent()
+    if (sessionYoloEnabled === undefined) throw new Error('请先选择本会话权限，确认后再继续。')
+    pendingSessionKey = undefined
+    return session
+  })()
+  const pending = work.finally(() => {
+    if (sessionPreparation === pending) sessionPreparation = undefined
+    if (selection === ownedSelection) {
+      sessionPending = false
+      renderControls()
+      live?.refresh()
+    }
+  })
+  sessionPreparation = pending
+  return pending
+}
 function submitComposer(): void {
   const input = composerRuntime.getDraft().trim()
   let session = current
@@ -1829,59 +1938,13 @@ function submitComposer(): void {
   renderControls()
   // A prompt can remain pending for the entire run. Controls follow daemon state, not this promise.
   const work = (async () => {
-    if (!session) {
-      const key = pendingSessionKey ?? crypto.randomUUID()
-      const draftModel = knownSessionModel
-      const workspace = selectedWorkspace
-      pendingSessionKey = key
-      const created = await client.session.new({ cwd: workspace?.path ?? '', sessionKey: key })
-      try {
-        await open(created.id, {
-          created,
-          preserveSending: true,
-          ...(workspace ? { workspace } : {}),
-          ...(draftModel ? { initialModel: draftModel } : {}),
-        })
-      } finally {
-        ownedSelection = selection
-      }
-      if (current !== created) throw new Error('会话选择已改变。')
-      session = current
+    const preparationSelection = current ? selection : selection + 1
+    try {
+      session = await prepareSession()
+    } finally {
+      ownedSelection = preparationSelection
     }
-    if (!session) throw new Error('会话创建失败。')
-    if (initialModelPending) {
-      const selectedModel = initialModelPending
-      const applied = await session.setModel({
-        slot: 'primary',
-        route: selectedModel.route,
-        model: selectedModel.id,
-        thinking: selectedModel.settings?.thinking ?? null,
-        contextWindow: selectedModel.settings?.contextWindow ?? null,
-      })
-      if (current !== session || selection !== ownedSelection) throw new Error('会话选择已改变。')
-      modelSelectionSeq = applied.effectiveFromSeq
-      knownSessionModel = selectedModel
-      initialModelPending = undefined
-      renderControls()
-    }
-    if (!connected || connectionEpoch !== permissionConnectionEpoch || permissionRefreshPending)
-      throw new Error('连接已变化，请等待权限同步后重新发送。')
-    if (initialPermissionPending !== undefined) {
-      const selectedPermission = initialPermissionPending
-      const enabled = yoloEnabled(selectedPermission)
-      const applied = await session.setYolo(enabled)
-      if (current !== session || selection !== ownedSelection) throw new Error('会话选择已改变。')
-      if (connectionEpoch !== permissionConnectionEpoch)
-        throw new Error('连接已变化，请等待权限同步后重新发送。')
-      permissionSelectionSeq = applied.effectiveFromSeq
-      sessionYoloEnabled = enabled
-      permissionMode = selectedPermission
-      initialPermissionPending = undefined
-    }
-    if (!connected || connectionEpoch !== permissionConnectionEpoch || permissionRefreshPending)
-      throw new Error('连接已变化，请等待权限同步后重新发送。')
     if (current !== session || selection !== ownedSelection) throw new Error('会话选择已改变。')
-    if (sessionYoloEnabled === undefined) throw new Error('请先选择本会话权限，确认后再发送。')
     const result = await (busy ? session.followUp(input) : session.prompt(input))
     const submittedId = session.id
     if (typeof result === 'object' && result.reason === 'completed' && !sessionTitles.has(submittedId))

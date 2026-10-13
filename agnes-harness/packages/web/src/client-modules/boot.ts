@@ -94,6 +94,8 @@ export type ClaimResolver = (entry: SlotEntry, extId: string) => boolean
 export async function startClientModules(options: {
   /** Raw, host-owned SDK client. `clientModule()` exposes a narrower facade to each module. */
   agnes: HostAgnesClient
+  /** Explicit user-action bridge; background service reads never create sessions. */
+  ensureActiveSession?: (() => Promise<string>) | undefined
   /** Same-origin BFF only; absent keeps browser service calls fail-closed. */
   clientServiceCaller?: ClientServiceCaller | undefined
   /** Separate authorized effect relay; absent keeps effect commands fail-closed. */
@@ -136,7 +138,7 @@ export async function startClientModules(options: {
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)')
   new AgnesClientService(ctx, options.agnes, options.clientServiceCaller, options.clientEffectCaller)
   const theme = new ThemeService(ctx, resolveTheme(pref, prefersDark.matches))
-  const session = new SessionService(ctx, undefined, options.agnes)
+  const session = new SessionService(ctx, undefined, options.agnes, options.ensureActiveSession)
   const resources = new ClientResourceService(ctx, options.agnes, session)
   const locale = new LocaleService(ctx, document.documentElement.lang || 'zh-CN')
   const commands = new CommandService(ctx, options.authorizeCommand)

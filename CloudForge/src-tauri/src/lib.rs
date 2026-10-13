@@ -1,5 +1,6 @@
 mod ai;
 mod commands;
+mod cad_mesh;
 mod ffi;
 mod localizer;
 mod result_reader;
@@ -51,6 +52,7 @@ pub fn run() {
         .manage(ai::AiState::default())
         .invoke_handler(tauri::generate_handler![
             commands::start_load,
+            commands::load_cad_mesh,
             commands::take_cloud,
             commands::clear_cloud,
             commands::generate_demo,

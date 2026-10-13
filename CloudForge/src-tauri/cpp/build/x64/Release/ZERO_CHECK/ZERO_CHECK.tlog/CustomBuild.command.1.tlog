@@ -1,0 +1,10 @@
+^E:\YUNTAO\CLOUDFORGE\SRC-TAURI\CPP\BUILD\CMAKEFILES\2ACFC644C4392C5AD452461E6B52192C\GENERATE.STAMP.RULE
+setlocal
+D:\bin\cmake.exe -SE:/yuntao/CloudForge/src-tauri/cpp -BE:/yuntao/CloudForge/src-tauri/cpp/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file E:/yuntao/CloudForge/src-tauri/cpp/build/cloudforge_core.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

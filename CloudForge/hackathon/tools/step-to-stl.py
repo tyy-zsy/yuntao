@@ -10,6 +10,7 @@
 #      Z 长 0.2056 m，而 meshFromShape 的产物只有 0.0106 m，肉眼可见地缺了一截。
 #      tessellate 直接返回 (points, facets)，写出的 STL 必然覆盖整个形状。
 import json
+import math
 import os
 import struct
 import sys
@@ -23,14 +24,19 @@ else:
     dst = os.path.abspath(args[1])
     # 绝对线性偏差越小三角面越多：建筑尺度 0.05 m 足够，机械小件用 0.005~0.01 m
     deflection = float(args[2]) if len(args) > 2 else 0.02
+    # FreeCAD imports ordinary STEP coordinates in mm. Legacy CloudForge STEP
+    # used metre values under a mm declaration; callers explicitly pass 1 for it.
+    preview_scale = float(args[3]) if len(args) > 3 else 1.0
     try:
+        if not math.isfinite(preview_scale) or preview_scale <= 0 or not math.isfinite(deflection) or deflection <= 0:
+            raise ValueError("invalid preview scale or deflection")
         import Part
 
         shape = Part.Shape()
         shape.read(src)
         bb = shape.BoundBox
 
-        points, facets = shape.tessellate(deflection)
+        points, facets = shape.tessellate(deflection / preview_scale)
 
         # 二进制 STL：80 字节头 + uint32 面数 + 每面 50 字节
         tris = []
@@ -49,14 +55,16 @@ else:
             fh.write(struct.pack("<I", len(tris)))
             for nx, ny, nz, a, b, c in tris:
                 fh.write(struct.pack("<12fH", nx, ny, nz,
-                                     a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, 0))
+                                     a.x * preview_scale, a.y * preview_scale, a.z * preview_scale,
+                                     b.x * preview_scale, b.y * preview_scale, b.z * preview_scale,
+                                     c.x * preview_scale, c.y * preview_scale, c.z * preview_scale, 0))
 
         # 覆盖性自检：写出的网格必须与形状包围盒一致，否则预览会"缺一截"却看不出来
-        zs = [p.z for p in points] or [0.0]
-        xs = [p.x for p in points] or [0.0]
-        ys = [p.y for p in points] or [0.0]
+        zs = [p.z * preview_scale for p in points] or [0.0]
+        xs = [p.x * preview_scale for p in points] or [0.0]
+        ys = [p.y * preview_scale for p in points] or [0.0]
         mesh_span = [max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)]
-        shape_span = [bb.XLength, bb.YLength, bb.ZLength]
+        shape_span = [bb.XLength * preview_scale, bb.YLength * preview_scale, bb.ZLength * preview_scale]
         worst = 0.0
         for m, s in zip(mesh_span, shape_span):
             if s > 1e-9:
@@ -69,11 +77,13 @@ else:
             "facets": len(tris),
             "points": len(points),
             "solids": len(shape.Solids),
-            "volume_m3": round(sum(s.Volume for s in shape.Solids), 9),
+            "volume_m3": sum(s.Volume for s in shape.Solids) * preview_scale ** 3,
             "bbox_m": [round(v, 4) for v in shape_span],
             "mesh_span_m": [round(v, 4) for v in mesh_span],
             "coverage_error": round(worst, 4),
             "deflection": deflection,
+            "preview_scale": preview_scale,
+            "preview_coordinate_unit": "m",
         }, ensure_ascii=False))
     except Exception as exc:  # freecadcmd 会吞异常并继续，必须自己捕获并以 JSON 回报
         print(json.dumps({"ok": False, "error": str(exc)[:300], "source": src}, ensure_ascii=False))

@@ -96,5 +96,5 @@ export const AI_PROFILES: AiProfile[] = [
 
 export const OPEN_FILTERS = {
   extensions: ["pcd", "ply", "txt", "stl", "obj", "bin"],
-  name: "点云文件",
+  name: "点云 / CAD STL 网格",
 };

@@ -16,3 +16,11 @@ add_subdirectory(
 
 add_executable(cloudforge-cli main.cpp)
 target_link_libraries(cloudforge-cli PRIVATE cloudforge_core)
+
+# 独立的 Windows 原生文件选择器，不链接点云检测/几何核心库。
+# 默认全量构建会生成此目标；AGH 可提前加载并复用 Common Item Dialog。
+if(WIN32)
+  add_executable(cloudforge-picker native-picker.cpp)
+  target_compile_definitions(cloudforge-picker PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0601)
+  target_link_libraries(cloudforge-picker PRIVATE ole32 shell32 uuid user32)
+endif()

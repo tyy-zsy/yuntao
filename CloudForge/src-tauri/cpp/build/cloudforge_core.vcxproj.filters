@@ -1,0 +1,390 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\detected_shape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\point_cloud_io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\point_cloud_generator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\ransac_detector.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\modern_ransac_refiner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\schnabel_detector.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\src\ransac_lib_api.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="E:\yuntao\CloudForge\src-tauri\cpp\shim\cloudforge_shim.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AABox.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AABox.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AACube.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AACube.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AACubeTree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AACubeTree.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AAKdTree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AAKdTree.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AAPlane.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\AAPlane.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Array.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\ArrayArithmetic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\BaseTree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\BaseTree.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\BBoxBuildInformationTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\BBoxDistanceKdTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\BucketSizeMaxLevelSubdivisionTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\BucketSizeSubdivisionTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\CellBBoxBuildInformationKdTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\CellCenterAACubeTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\CellLevelTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\CellParentTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\CellRangeDataTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\CellSizeDataTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Covariance.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\DynVectorKernel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\FaceNeighborAACubeTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\FlatCopyVector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Frame.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\HyperplaneCoordinateSystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\ImmediateTreeDataKernels.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\IncrementalDistanceKdTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\IndexedIterator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\IndexedTreeDataKernels.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\IndexedTreeDataStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Jacobi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\KdTree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\KdTree.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\L1Norm.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\L2Norm.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\LevelBuildInformationTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\LimitedHeap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\MathHelper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\MatrixXX.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\MaxIntervalSplittingKdTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\MaxLevelSubdivisionTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\MaxNorm.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Mean.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\NearestNeighbor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\NearestNeighbors.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\NullClass.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\NullStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\NullStrategy.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\NullTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\OnOff.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Orientation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Plane.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Plane.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\ScalarTypeConversion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\ScalarTypeDeferer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\ShuffleIndicesTreeDataKernelStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\SlidingMidpointSplittingKdTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\StdContainerAdaptor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\StdOverrides.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\Swap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\VectorKernel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\VectorXD.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\GfxTL\WeightFunc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\AlignedAllocator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\NoShrinkVector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\Pair.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\Performance.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\Random.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\RefCount.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\RefCounted.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\RefCountPtr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\MiscLib\Vector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\BasePrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\basic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Bitmap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\BitmapPrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Candidate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Cone.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\ConePrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\ConePrimitiveShapeConstructor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Cylinder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\CylinderPrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\CylinderPrimitiveShapeConstructor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\FlatNormalThreshPointCompatibilityFunc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Grid.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\IndexIterator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\LevMarFitting.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\LevMarFunc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\LevMarLSWeight.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\LowStretchSphereParametrization.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\LowStretchTorusParametrization.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Octree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Plane.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\PlanePrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\PlanePrimitiveShapeConstructor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\PointCloud.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\PrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\PrimitiveShapeConstructor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\PrimitiveShapeVisitor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\RansacShapeDetector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\RebuildAACubeTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\ScoreAACubeTreeStrategy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\ScoreComputer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\ScorePrimitiveShapeVisitor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\SimpleTorusParametrization.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Sphere.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\SpherePrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\SpherePrimitiveShapeConstructor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\Torus.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\TorusPrimitiveShape.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="E:\yuntao\CloudForge\src-tauri\cpp\third_party\ransac_sd\TorusPrimitiveShapeConstructor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="E:\yuntao\CloudForge\src-tauri\cpp\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{D44D4AC4-7C97-338F-B3EF-1AA52128ABC5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{0D30E5DA-C178-30A6-B543-2489D08B4DA8}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

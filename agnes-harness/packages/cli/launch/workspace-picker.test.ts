@@ -51,7 +51,12 @@ describe('native workspace picker', () => {
     await expect(picker.pick(new AbortController().signal)).resolves.toEqual({ status: 'unavailable' })
     expect(run.mock.calls[0]?.[1]).toContain('-STA')
     const encodedScript = run.mock.calls[0]?.[1].at(-1)
-    expect(Buffer.from(encodedScript ?? '', 'base64').toString('utf16le')).toContain('FolderBrowserDialog')
+    const script = Buffer.from(encodedScript ?? '', 'base64').toString('utf16le')
+    expect(script).toContain('FolderBrowserDialog')
+    expect(script).toContain('$owner.TopMost = $true')
+    expect(script).toContain('$dialog.ShowDialog($owner)')
+    expect(script).toContain('$dialog.Dispose()')
+    expect(script).toContain('$owner.Dispose()')
   })
 
   it('prefers Zenity, treats its exit 1 as cancel, and falls back to KDialog', async () => {
@@ -122,6 +127,26 @@ describe('native workspace picker', () => {
       run: async () => ({ exitCode: 0, stdout: `/${'a'.repeat(4096)}` }),
     })
     await expect(overlong.pick(new AbortController().signal)).resolves.toEqual({ status: 'unavailable' })
+  })
+
+  it('does not launch a dialog after cancellation during capability discovery', async () => {
+    const controller = new AbortController()
+    let finish: ((executable: string) => void) | undefined
+    const run = vi.fn<PickerCommandRunner>()
+    const picker = createNativeWorkspacePicker({
+      platform: 'win32',
+      env: { SystemRoot: 'C:\\Windows' },
+      run,
+      findExecutable: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    })
+    const pending = picker.pick(controller.signal)
+    controller.abort()
+    finish?.('powershell.exe')
+    await expect(pending).resolves.toEqual({ status: 'cancelled' })
+    expect(run).not.toHaveBeenCalled()
   })
 
   it('terminates the native subprocess when the request is aborted', async () => {

@@ -55,7 +55,7 @@ three.js 需要真实 DOM 节点与 canvas，交给 React 更麻烦。`'react'` 
 高度取值要用 `clientHeight` **减去 padding**（宿主卡片 `padding:1rem`），否则宿主
 `overflow:auto` 会多出一截外层滚动条。
 
-## 3. 服务：12 个声明（白名单即通道）
+## 3. 服务：20 个声明（白名单即通道）
 
 `ctx.agnes.services.call(name, input)` 是浏览器→后端唯一通道，硬约束
 （`packages/protocol/gen/ts/extension-service.ts:8`）：
@@ -70,17 +70,25 @@ three.js 需要真实 DOM 节点与 canvas，交给 React 更麻烦。`'react'` 
 | 服务 | kind | 用途 |
 |---|---|---|
 | `cloudforge.report` | query | 工作流 / 交付物 / 套件摘要总览 |
+| `cloudforge.pickcloud` | query | 原生文件选择任务启动 |
+| `cloudforge.pickstatus` | query | 原生文件选择进度与结果 |
 | `cloudforge.cloud` | query | 点云分页（uint16 量化） |
 | `cloudforge.cloudmeta` | query | 点云元信息（格式诊断） |
 | `cloudforge.scene` | query | 检测结果（形状 / 系数 / 覆盖统计） |
-| `cloudforge.mesh` | query | 网格分页；`.step` 经 freecadcmd 转 STL 并缓存 |
-| `cloudforge.verify` | query | **现跑** `cloudforge-cli verify`（仓库无落盘 checks） |
+| `cloudforge.mesh` | query | 网格分页；STEP 复用同源 STL，或后台通过 CadQuery / FreeCAD 生成预览 |
+| `cloudforge.verify` | query | 兼容旧入口，仅提示使用 AGH 会话验证，不直接执行 CLI |
 | `cloudforge.suite` | query | 回归套件 + 鲁棒性网格 |
 | `cloudforge.trace` | query | 解析 AGH 事件 JSONL → 执行链（离线摘要/兜底） |
 | `cloudforge.run` | effect | 面板调 CLI（写操作） |
 | `cloudforge.preview` | effect | 拉起 FreeCAD / CloudForge GUI |
 | `cloudforge.export` | effect | 调 AGH 官方 `agnes export` 导出执行记录 |
 | `cloudforge.exportstatus` | query | 导出进度（导出是异步的，见 §5） |
+| `cloudforge.cad` | effect | 从当前点云启动检测、重建与同源 STEP/STL 交付 |
+| `cloudforge.cadstatus` | query | CAD 生成阶段、结果路径与错误 |
+| `cloudforge.detect` | effect | 点云页直接启动当前文件的本地检测 |
+| `cloudforge.detectstatus` | query | 点云检测阶段、结果目录与错误 |
+| `cloudforge.verifyrequest` | effect | 固定当前文件、参考和阈值，准备 AGH 验证请求 |
+| `cloudforge.verifystatus` | query | 当前请求的状态、核验范围和实际工具结果 |
 
 浏览器侧还要过 `agnes.client.json` 的 `services` 白名单，少一个就抛
 `client service is unavailable`（`client-module.ts:83-84`）。
@@ -244,3 +252,222 @@ node hackathon/cloudforge-panel/tools/preview.mjs --port 5199
 用自动化浏览器打开 4177 时若报 `SEMANTIC_REJECTED (-32011)`，那是
 `WORKSPACE_INVALID / not-found`（`local-dev` 的 `policy.workspacePackages: require-project-trust`
 需要先信任工作区），与面板无关；在已配置好的工作台浏览器里打开即可。
+
+## 11. Windows 原生文件选择
+
+点云与 CAD 页签共用 `client/pick.js`。点击后立即显示“打开中…”，后台通过
+`cloudforge.pickcloud` 返回选择任务 ID，再由 `cloudforge.pickstatus` 报告状态：
+`starting` 表示正在准备窗口，`pending` 表示窗口进入选择流程，最终返回选中文件、取消或错误。
+首次状态查询不等待定时器，开始两秒每 200 ms 查询，随后每 800 ms 查询；取消与失败都会恢复按钮。
+
+Windows 默认使用独立的 `cloudforge-picker.exe`，不加载点云检测核心库。
+在项目根目录构建：
+
+```powershell
+cmake -S hackathon/cli -B hackathon/cli/build -G "Visual Studio 17 2022" -A x64
+cmake --build hackathon/cli/build --config Release --target cloudforge-picker --parallel 4
+```
+
+程序位置按项目根目录解析为 `hackathon/cli/build/Release/cloudforge-picker.exe`。
+插件加载以及面板打开/刷新读取总览时，提前启动 STA helper，创建并配置
+`IFileOpenDialog`，分别保留点云和 CAD 选择器；准备过程不调用 `Show`，不显示或激活窗口。
+实际点击才发送 stdin JSON 请求并显示对应选择器，避免每次重新启动 PowerShell、加载
+Windows Forms 和创建 COM 选择器。未构建原生程序时回退到原 PowerShell 选择器。
+helper 初始化失败不会阻断面板加载，点击选择仍可重新启动；初始化超过 15 秒会回收。
+
+就绪 helper 可空闲保留 15 分钟，打开/刷新面板时续期；以一个进程的内存换取点击响应，
+空闲期间不轮询、不自动重启，也不会在选择过程中因续期而启动第二个进程或回收活动窗口。
+文件选择框使用位于当前屏幕的置顶 owner，只有明确点击后才显示。
+原生程序通过窗口可见状态报告 `pending`，不会更改浏览器或系统的全局窗口设置。
+下次选择默认使用最近一次选择的本地目录，初次使用项目目录；目录准备不在点击路径上重复执行。
+客户端将普通读取限制为一个在途请求，选择开始和状态查询优先于未发送的普通读取。
+选择期间暂停队列中的点云/网格分页和后台查询，结束或失败后恢复；取消的旧分页不会再发送。
+AGH 原有服务白名单、完整性与信任校验继续执行。
+插件卸载时结束 helper 和活动对话框，父进程退出也执行清理。
+未预加载完成或超过闲置保留期时，点击仍需等待初始化；页面不会在窗口准备完成前声称“已弹出”。
+
+## 12. 面板首屏与展开性能
+
+`client/index.js` 使用稳定的 React ref，宿主会话状态更新不会销毁并重新挂载整个
+面板。页签数据按当前可见页加载，隐藏页在切换时再刷新；手动刷新和回合结束仍
+重新读取当前产物。折叠时暂停三维视图，展开复用已有 viewer。
+
+点云按页到货后显示首批坐标，不等待完整点云和所有几何内点计算。
+完整载荷的几何距离筛选分时间片执行，并丢弃已取消或过期的刷新结果，
+保持原有筛选阈值与坐标精度。CAD、验证与轨迹请求不再占用点云首屏的加载链路。
+
+客户端修改后，在 CloudForge 仓库根执行：
+
+```powershell
+node hackathon/cloudforge-panel/tools/build-client.mjs
+```
+
+安装包的客户端入口为 `client/bundle/index.js`：轻量外壳及小依赖合并，页签使用
+相对动态 chunks，三维库不阻塞外壳挂载。所有输出仍由 AGH 递归快照及校验。
+单个 chunk 的原始内容限制为 750 KiB，为 base64 与 JSON 留出传输余量。
+构建依赖沿用 CloudForge 前端安装的 esbuild；生成文件随插件一起更新。
+
+## 13. 点云生成 CAD 与内嵌预览
+
+生成入口需要先编译 C++ CLI。在项目根目录执行：
+
+```powershell
+cmake -S hackathon/cli -B hackathon/cli/build -G "Visual Studio 17 2022" -A x64
+cmake --build hackathon/cli/build --config Release --target cloudforge-cli --parallel 4
+```
+
+Windows 默认路径为 `hackathon/cli/build/Release/cloudforge-cli.exe`，也可通过
+`CLOUDFORGE_CLI` 显式指定。仅有 `src-tauri/cpp/build` 的核心库产物不能替代 CLI。
+本机所用 RANSAC 库没有 `Options.m_randomSeed` 字段，核心源码保留已有的 `std::srand`
+设置随机种子，并移除对不存在字段的重复赋值，以便兼容此库构建。
+
+CAD 页提供“从当前点云生成 CAD”。输入使用点云页当前选择的 PLY/PCD 和场景预设，
+生成服务通过 effect 命令启动，继续使用 AGH 原有授权通道。任务立即返回 ID，
+`cloudforge.cadstatus` 串行轮询检测、重建、导出的当前阶段，长计算不占用 30 秒服务响应窗口。
+切页或折叠暂停浏览器轮询，后台继续生成；卸载插件结束其活动子进程。
+
+每次交付写入 `outputs/cad-<时间>-<任务ID>/`。仅复用有匹配源文件身份和点数的检测结果；
+否则对实际选中的点云重新检测。PLY/PCD 按属性表解析，并标准化为不居中、不重排的 XYZ PLY，
+让内点索引与建模输入保持对应。以平面为主且含水平面的检测采用墙体、地板、顶棚骨架路线，
+其余采用 CLI 的参数化几何实体路线。此流程重建检测到的结构，页面说明模型范围。
+
+同一个 CadQuery 模型同时导出 `model.step` 和米制预览 `model.stl`，并记录
+`cad.manifest.json`、STL 元信息和源文件身份。导出检查空实体、无效几何、非有限坐标、
+源点云跨度与 CAD 尺寸及网格覆盖。机械路线只执行本次 CLI 新生成模板的建模部分，
+历史脚本的导出尾段不执行。
+
+建模坐标按点云的米制保存，STEP 导出时转换为毫米数值，匹配 CadQuery 默认的
+毫米单位声明，使外部 CAD 软件读取正确物理尺寸。预览网格保持米制，可直接与点云叠加。
+已有普通 STEP 导入后从毫米换算为米；明确关联的旧 CloudForge 产物使用历史坐标比例，
+相同比例写入缓存身份，避免错误复用。
+
+打开 CAD 页自动加载当前工作流最近的关联交付物，生成完成自动显示新模型。
+生成期间切换了点云或工作流时，结果提供“查看生成结果”入口，保留用户当前选择。
+网格和叠加点云的晚回调会被取消或忽略；同文件重载保留视角，换文件首次取景。
+
+已有 STEP 优先复用身份匹配的同源 STL；缺少网格时通过 `cad-preview.py` 用本机 CadQuery
+导入 STEP，FreeCAD 作为可用的回退内核。后台转换返回 pending 状态，浏览器继续查询，
+完成后再分页读取网格。缓存按 STEP 身份和网格偏差分别记录，多个 STEP 不共享 `preview.stl`。
+FreeCAD 外部打开与独立校验仍保留。运行依赖是已安装 CadQuery 的 Python 环境，
+建筑骨架还需 NumPy/SciPy；可通过 `CLOUDFORGE_PYTHON` 指定解释器。
+
+默认优先使用项目内 `.venv-cad`，该目录忽略提交。准备环境时执行：
+
+```powershell
+python -m venv .venv-cad
+.venv-cad/Scripts/python.exe -m pip install -r hackathon/tools/requirements-cad.txt
+```
+
+环境安装由项目维护者执行，运行时缺少依赖会明确报错，生成入口不自动安装软件。
+
+客户端改动需运行 §12 的打包命令，并连同服务声明更新插件。
+
+## 14. 桌面 GUI 预览与可复现路径
+
+“GUI 预览”打开 CloudForge 桌面窗口。STEP/STP 先使用身份匹配的同源 STL，
+再交给桌面程序。STL 使用专门的三角网格入口，保留完整面片、原坐标与单位，
+不通过点云加载器去重成稀疏顶点。支持二进制和 ASCII STL，文件最大 128 MiB、
+100 万三角面；非法、截断或非有限坐标会明确报错。
+
+桌面自动进入 CAD 预览：实体表面使用光照和轮廓线，可切换线框，初次载入自动全景。
+滚轮缩放、左键旋转、右键/中键平移后保留视角，“回到全景”恢复完整模型。
+侧栏显示三角面数量，隐藏点云 AI 识别与精拟合控件。点云文件继续原加载与识别流程。
+
+准备桌面程序时，在项目根目录执行生产构建：
+
+```powershell
+npm run tauri build -- --no-bundle
+```
+
+默认查找 `src-tauri/target/release/cloudforge.exe`。源码中的脚本、`.venv-cad`、CLI 和
+桌面程序均按项目根目录定位，不含开发者个人盘符路径。`CLOUDFORGE_EXE`、
+`CLOUDFORGE_PYTHON`、`CLOUDFORGE_CLI` 可以指定自定义位置，相对路径按项目根目录解析。
+运行时将文件路径解析为完整路径后传给窗口，避免原生进程工作目录改变导致找不到文件。
+
+GUI 启动使用项目 Python 环境执行脚本，启动器通过固定 PowerShell 程序和 stdin JSON
+传输路径，设置程序工作目录，并只检查本次返回的进程 ID。找不到程序、输入格式不支持或
+启动进程退出时返回明确错误，不能借用已有同名进程声称打开成功。
+
+## 15. 点云页开始检测
+
+选择点云后，点击“开始检测”直接调用本地 CloudForge CLI。场景下拉框决定
+`outdoor` 或 `mechanical` 预设，调用继续通过 AGH effect 命令授权通道，
+命令 ID 为 `cloudforge.detect.start`。此操作不发起模型会话，也不自动导出 CAD。
+原“检测”显示模式改名为“检测结果”，与启动动作区分。
+
+`cloudforge.detect` 立即返回任务 ID，`cloudforge.detectstatus` 串行读取进度。
+每次输出单独的 `outputs/detect-<时间>-<任务ID>/`，保存检测结果、内点索引与
+`run.meta.json`。状态为 `pending/ready/failed`，只将 ready 结果加入工作流列表。
+源点云引用按任务目录保存为相对路径，RPC 根据项目目录解析完整路径。
+
+检测输入标准化为保序、未居中的有限 XYZ 坐标，CLI 使用 `--preserve-points` 跳过
+默认去重与大文件降采样，保证内点索引对应预览中的点。既有 CLI 调用不带该参数时
+继续原预处理。检测和 CAD 重建共享这一保序输入约定，修改 CLI 后需重新构建 §13 的产物。
+
+检测完成后，页面采用对应的工作流、更新覆盖率和基元清单，保持同一源文件的视角。
+期间换了点云、工作流或场景时，保留当前选择，并提供“查看检测结果”。隐藏点云页暂停
+进度查询，重新显示后恢复；卸载插件中止其活动子进程。超时和查询失败明确显示原因，
+可重新开始或恢复查询。选中尚未检测的新文件时，顶栏和页脚显示实际点数及待检测状态，
+不继续展示上一文件的基元统计。
+
+## 16. 当前模型验证由 AGH 组织与执行
+
+按[参赛指南的技术和提交要求](https://agnes-ai.feishu.cn/wiki/QNK6wKOD7ifkxHkJxoycb1MXnwl)，
+AGH 应参与核心多步任务和外部工具调用，并保留可核查的实际执行记录。
+验证页使用当前 AGH 会话完成读取输入、调用工具、解释结果和报告回写的闭环。
+
+先选择点云并完成其检测，再在验证页设置参数容差（默认 5 mm）与角度容差（默认 2°）。
+有真值时使用“选择真值 JSON”，参考应对应当前点云并采用相同坐标系、米单位和
+CLI 的 `shapes` 格式；源文件身份或明确源引用必须匹配。仅具有匹配点数的用户参考
+会被标明为用户选定，不能声称已独立证明参考来源。清除参考后可做基础核验。
+
+“让 AGH 验证当前模型”先通过 `cloudforge.verifyrequest` effect 准备
+`outputs/verify-<时间>-<任务ID>/request.json`，随后提交给当前会话。会话忙时加入下一轮；
+空闲时等待 AGH 工具真正启动。AGH 应读取请求、调用正式工具 `cloudforge_verify_current`，
+再读取报告、解释缺失项或失败项，不允许更换成其他点云或合成示例。
+
+工具通过 AGH `ToolContext.exec` 执行 CLI 元信息读取、可用真值的实际 `verify`，以及
+项目 Python 环境中的 CAD 检查。基础检查包括有限坐标、原点序索引、统计一致性、
+拟合残差和明确同源 CAD 的实体有效性、单位、体积及包围盒范围。
+缺少真值时 `precisionVerified=false`，结论为部分核验或已发现问题的 FAIL；不能显示真实精度 PASS。
+CAD 实体和范围核验不能替代 CAD 全表面对点云距离测量，也不代表真实尺寸精度认证。
+
+实际执行后写入同一任务目录的 `status.json`、`verify.json`、`verify-report.md`。
+回执记录真实 AGH 会话与工具调用标识；完整可审计轨迹仍由 AGH 宿主保存，报告不伪造 trace。
+请求绑定会话、源文件、检测结果、同源 CAD、真值、场景及阈值；输入变化会使旧结果失效。
+页面重载从后台恢复匹配任务，切换模型不会显示其他任务的结果。历史回归与鲁棒性网格
+折叠显示，并明确不代表当前模型验证通过。
+
+复现时在项目根构建 CLI（§13）、准备 CAD Python 环境（§12），构建面板客户端后安装或更新
+`hackathon/cloudforge-tools` 与 `hackathon/cloudforge-panel` 两个 AGH 包。
+已有工具包可用 `hackathon/agh-scripts/update-cloudforge-tools.mts` 保留安装记录并更新。
+在 AGH 选择实际使用的模型和 CloudForge 工作区，保留原有工具审批与工作区权限策略。
+提交材料应记录实际模型名称、版本、用途、调用方式，并导出对应会话的真实 AGH 执行记录，
+把任务目录中的请求、结果和报告一起归档。路径默认从项目根解析。
+
+以下是用户复现步骤及预期行为，**本次实现没有执行这些案例或生成运行证据**：
+
+| 情况 | 操作 | 应观察的真实行为 |
+| --- | --- | --- |
+| 正常 | 检测当前点云，选匹配真值，交给 AGH 验证 | AGH 工具调用与 CLI `verify` 有实际轨迹；按实际误差显示 PASS/FAIL |
+| 边界 | 不选真值，交给 AGH 验证 | 基础模型检查可执行，但真实精度未验证，不显示整体精度 PASS |
+| 失败 | 选另一份点云的真值，或请求准备后改变源文件 | 明确拒绝不匹配参考或标记结果失效，不验证其他示例 |
+| 环境缺失 | CLI 或 CAD Python 依赖不可用 | 报告实际依赖错误/缺失检查，AGH 解释后可继续交互 |
+
+录制演示时执行这些真实操作，并展示会话工具轨迹与结果的对应关系；不要将历史测试
+或预期行为填成新一次执行的成功记录。
+
+## 17. 新对话首次选择文件
+
+AGH 的新对话起初是草稿，选择工作区与模型并不等于已经建立活动会话。
+工作台的 `workbench.panel` 支持草稿挂载，但后端 query/effect 仍要求活动会话。
+因此无会话时只显示待选择提示，不主动查询工作区报告。
+
+用户点击“选择点云”或“选择 CAD”时，共享选择流程先调用宿主
+`ctx.session.ensureActive()`，由宿主使用当前选定的工作区建立并挂接空会话，
+同步当前模型及权限选择，然后打开原生文件对话框。此步骤不发送模型 prompt。
+后台读取不会调用此入口，也不会悄悄创建任务。没有可用工作区或创建失败时显示具体原因，
+保留用户草稿，允许重试；同一次创建过程复用请求，避免重复会话。
+
+会话挂接后继续使用原有服务白名单、工作区信任与 effect 授权通道。
+旧宿主没有此可选接口时，面板提示先在 AGH 中发送第一条消息建立会话。

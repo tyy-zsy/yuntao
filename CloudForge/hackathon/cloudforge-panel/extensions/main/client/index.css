@@ -1294,3 +1294,117 @@ progress.cf-progress::-moz-progress-bar {
 .cf-scroll::-webkit-scrollbar-thumb:hover {
   background: #d4d4d8;
 }
+/* ── 「选择点云」状态位 ────────────────────────────────────────
+   原生对话框由服务端 PowerShell 弹出（拿真实磁盘路径），网页侧只负责
+   显示轮询状态。默认隐藏（display:none），开始选择后由 .on 显出，
+   结果停留 30s 后 JS 自动摘掉 .on。宽度有限，长文本 ellipsis 收尾。 */
+.cf-pick-note {
+  display: none;
+  max-width: 38%;
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--cf-text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cf-pick-note.on {
+  display: inline-block;
+}
+
+/* CAD 建模入口：来源和重建范围先于视口，进度独立于底部文件选择状态。 */
+.cf-cad-build {
+  flex: none;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cf-border-soft);
+  border-radius: var(--cf-radius);
+  background: var(--cf-bg-card);
+}
+.cf-cad-build > .hidden {
+  display: none;
+}
+.cf-cad-source {
+  font-size: 11px;
+  color: var(--cf-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cf-cad-scope {
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--cf-text-mute);
+}
+.cf-cad-job {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--cf-text-dim);
+  word-break: break-word;
+}
+.cf-cad-build .cf-primary-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* 点云检测入口：任务状态独立于原生文件选择，空状态控件不占布局。 */
+.cf-cloud-detect {
+  flex: none;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cf-border-soft);
+  border-radius: var(--cf-radius);
+  background: var(--cf-bg-card);
+}
+.cf-cloud-detect > .hidden {
+  display: none;
+}
+.cf-cloud-source {
+  font-size: 11px;
+  color: var(--cf-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cf-cloud-scope {
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--cf-text-mute);
+}
+.cf-cloud-job {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--cf-text-dim);
+  word-break: break-word;
+}
+
+/* 当前验证的参数单位直接显示在输入旁，采用宿主主题。 */
+.cf-verify-thresholds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0;
+}
+.cf-verify-thresholds label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--cf-text-dim);
+}
+.cf-verify-thresholds input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius-sm);
+  background: var(--cf-bg-card);
+  color: var(--cf-text);
+}
+.cf-verify-thresholds input:focus-visible {
+  outline: 2px solid var(--cf-accent);
+  outline-offset: 2px;
+}
